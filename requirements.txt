@@ -6,6 +6,7 @@ python-multipart==0.0.12
 # Database
 asyncpg==0.29.0
 alembic==1.13.3
+psycopg2-binary==2.9.9  # For Alembic migrations
 
 # Redis
 redis==5.1.1
