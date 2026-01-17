@@ -2,21 +2,12 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
-# Install system dependencies
+# Install system dependencies including Playwright deps
 RUN apt-get update && apt-get install -y \
     gcc \
     postgresql-client \
     curl \
-    && rm -rf /var/lib/apt/lists/*
-
-# Copy requirements first for better caching
-COPY requirements.txt .
-
-# Install Python dependencies
-RUN pip install --no-cache-dir -r requirements.txt
-
-# Install Playwright system dependencies manually (more reliable than playwright install-deps)
-RUN apt-get update && apt-get install -y \
+    # Playwright system dependencies
     libnss3 \
     libnspr4 \
     libdbus-1-3 \
@@ -31,9 +22,14 @@ RUN apt-get update && apt-get install -y \
     libxrandr2 \
     libgbm1 \
     libasound2 \
+    libxshmfence1 \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Playwright browsers
+# Copy requirements and install Python packages FIRST
+COPY requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# NOW install Playwright browsers (AFTER pip install playwright)
 RUN playwright install chromium
 
 # Copy application code
@@ -42,12 +38,8 @@ COPY . .
 # Create logs directory
 RUN mkdir -p logs
 
-# Expose port (Railway will override with $PORT)
+# Expose port
 EXPOSE 8010
 
-# Health check disabled - Railway has its own healthcheck
-# HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-#   CMD curl -f http://localhost:$PORT/health || exit 1
-
-# Start command (Railway will use railway.json startCommand)
+# Start command
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8010"]

@@ -28,6 +28,18 @@ async def lifespan(app: FastAPI):
         await create_redis_client()
         logger.info("Redis client initialized")
 
+        # Verify Playwright installation
+        try:
+            from playwright.async_api import async_playwright
+            async with async_playwright() as p:
+                browser = await p.chromium.launch(headless=True)
+                await browser.close()
+            logger.info("✅ Playwright chromium verified")
+        except Exception as e:
+            logger.error(f"❌ Playwright verification failed: {e}")
+            # Don't crash the app, just log the error
+            # Kaspi auth will fail gracefully with proper error message
+
     except Exception as e:
         logger.error(f"Failed to initialize application: {e}")
         raise

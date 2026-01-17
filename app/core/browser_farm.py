@@ -243,8 +243,16 @@ async def get_browser_farm() -> BrowserFarmSharded:
     """Get global browser farm instance"""
     global browser_farm
     if browser_farm is None:
-        browser_farm = BrowserFarmSharded()
-        await browser_farm.initialize()
+        try:
+            browser_farm = BrowserFarmSharded()
+            await browser_farm.initialize()
+            logger.info("Browser farm initialized successfully")
+        except Exception as e:
+            logger.error(f"Failed to initialize browser farm: {e}")
+            raise RuntimeError(
+                f"Playwright browser farm initialization failed. "
+                f"Ensure chromium is installed. Error: {e}"
+            )
     return browser_farm
 
 
