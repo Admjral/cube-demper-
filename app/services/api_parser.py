@@ -1,0 +1,680 @@
+"""
+Kaspi API Parser Service - FastAPI async version
+
+Provides async functions for interacting with Kaspi merchant API:
+- Fetching product lists
+- Parsing products by SKU
+- Syncing product prices
+- Getting competitor prices
+- Fetching preorders
+
+All functions use async patterns with httpx.AsyncClient and BrowserFarmSharded.
+"""
+
+import asyncio
+import json
+import logging
+import random
+import re
+from datetime import datetime
+from typing import Optional, Dict, Any, List
+from decimal import Decimal
+
+import httpx
+from playwright.async_api import TimeoutError as PlaywrightTimeoutError
+
+from ..config import settings
+from ..core.browser_farm import get_browser_farm
+from ..core.rate_limiter import get_global_rate_limiter
+from ..core.database import get_db_pool
+from .kaspi_auth_service import get_active_session, validate_session, KaspiAuthError
+
+logger = logging.getLogger(__name__)
+
+
+# ============================================================================
+# Session Helper Functions
+# ============================================================================
+
+def _format_cookies(cookies: list) -> dict:
+    """Convert cookies list to dictionary format for requests"""
+    formatted_cookies = {}
+    for cookie in cookies:
+        if isinstance(cookie, dict):
+            formatted_cookies[cookie.get('name', '')] = cookie.get('value', '')
+        else:
+            logger.warning(f"Invalid cookie format: {cookie}")
+    return formatted_cookies
+
+
+def _get_cookies_from_session(session: dict) -> dict:
+    """Extract and format cookies from session data"""
+    if not session:
+        return {}
+
+    cookies = session.get('cookies', [])
+    if isinstance(cookies, list):
+        return _format_cookies(cookies)
+    elif isinstance(cookies, dict):
+        return cookies
+
+    return {}
+
+
+def _get_merchant_uid_from_session(session: dict) -> Optional[str]:
+    """Extract merchant UID from session data"""
+    return session.get('merchant_uid')
+
+
+# ============================================================================
+# User Agent and Header Utilities
+# ============================================================================
+
+USER_AGENTS = [
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/16.3 Safari/605.1.15",
+    "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36",
+]
+
+ACCEPT_ENCODINGS = [
+    "gzip, deflate, br",
+    "gzip, deflate, br, zstd",
+]
+
+ACCEPT_LANGUAGES = [
+    "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7",
+    "ru-RU,ru;q=0.8,en-US;q=0.7,en;q=0.6",
+]
+
+X_KS_CITY = [
+    "750000000",  # Almaty
+    "770000000",  # Astana
+    "730000000",  # Shymkent
+]
+
+
+def _get_random_headers(sku: Optional[str] = None) -> dict:
+    """Generate random headers to avoid detection"""
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "accept-encoding": random.choice(ACCEPT_ENCODINGS),
+        "accept-language": random.choice(ACCEPT_LANGUAGES),
+        "cache-control": random.choice(["no-cache", "max-age=0"]),
+        "connection": "keep-alive",
+        "content-type": "application/json",
+        "pragma": random.choice(["no-cache", ""]),
+        "x-requested-with": "XMLHttpRequest",
+        "sec-fetch-site": "same-origin",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-dest": "empty",
+        "user-agent": random.choice(USER_AGENTS),
+        "x-ks-city": X_KS_CITY[0],
+    }
+
+    if sku:
+        headers["referer"] = f"https://kaspi.kz/shop/p/{sku}/?c=710000000"
+    else:
+        headers["referer"] = "https://kaspi.kz/"
+
+    return headers
+
+
+def _get_merchant_headers() -> dict:
+    """Get standard headers for merchant API requests"""
+    return {
+        "x-auth-version": "3",
+        "Origin": "https://kaspi.kz",
+        "Referer": "https://kaspi.kz/",
+        "User-Agent": random.choice(USER_AGENTS),
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Encoding": random.choice(ACCEPT_ENCODINGS),
+        "Accept-Language": random.choice(ACCEPT_LANGUAGES),
+        "Cache-Control": "no-cache",
+        "Pragma": "no-cache",
+    }
+
+
+# ============================================================================
+# Product Mapping Functions
+# ============================================================================
+
+def _map_offer(raw_offer: dict) -> dict:
+    """Map raw Kaspi API offer to internal product format"""
+    # Extract product ID from URL
+    product_url = raw_offer.get("shopLink", "")
+    match = re.search(r'/p\/.*-(\d+)/', product_url)
+    external_kaspi_id = match.group(1) if match else None
+
+    # Parse availabilities
+    availabilities = raw_offer.get("availabilities", [])
+    availability_info = {}
+
+    for availability in availabilities:
+        store_id = availability.get("storeId", "")
+        if store_id:
+            pp_match = re.search(r'PP(\d+)', store_id)
+            if pp_match:
+                pp_number = pp_match.group(1)
+                pp_key = f"PP{pp_number}"
+
+                available = availability.get("available", "no")
+                stock_count = availability.get("stockCount")
+                if stock_count is not None:
+                    stock_count = int(stock_count)
+
+                pre_order = availability.get("preOrder", 0)
+                if pre_order is not None:
+                    pre_order = int(pre_order)
+
+                availability_info[pp_key] = {
+                    "available": available,
+                    "stock_count": stock_count,
+                    "pre_order": pre_order
+                }
+
+    return {
+        "kaspi_product_id": raw_offer.get("offerId"),
+        "kaspi_sku": raw_offer.get("sku"),
+        "name": raw_offer.get("masterTitle"),
+        "brand": raw_offer.get("brand"),
+        "category": raw_offer.get("masterCategory"),
+        "price": raw_offer.get("minPrice", 0),
+        "image_url": (
+            f"https://resources.cdn-kaspi.kz/img/m/p/{raw_offer.get('images', [])[0]}"
+            if raw_offer.get('images')
+            else None
+        ),
+        "external_kaspi_id": external_kaspi_id,
+        "availabilities": availability_info,
+        "updated_at": raw_offer.get("updatedAt")
+    }
+
+
+# ============================================================================
+# Main API Functions
+# ============================================================================
+
+async def get_products(
+    merchant_id: str,
+    session: dict,
+    page_size: int = 100,
+    max_retries: int = 3
+) -> List[dict]:
+    """
+    Fetch all products for a merchant using pagination.
+
+    Args:
+        merchant_id: Merchant UID
+        session: Session data with cookies
+        page_size: Products per page (max 100)
+        max_retries: Maximum retry attempts on rate limit
+
+    Returns:
+        List of products in internal format
+
+    Raises:
+        KaspiAuthError: If session is invalid
+        httpx.HTTPError: If API request fails
+    """
+    cookies = _get_cookies_from_session(session)
+    if not cookies:
+        raise KaspiAuthError("No cookies found in session")
+
+    merchant_uid = _get_merchant_uid_from_session(session) or merchant_id
+    headers = _get_merchant_headers()
+
+    all_offers = []
+    page = 0
+    rate_limiter = get_global_rate_limiter()
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        while True:
+            url = (
+                f"https://mc.shop.kaspi.kz/bff/offer-view/list"
+                f"?m={merchant_uid}&p={page}&l={page_size}&a=true"
+            )
+
+            retries = 0
+            while retries < max_retries:
+                try:
+                    # Acquire rate limit token
+                    await rate_limiter.acquire()
+
+                    response = await client.get(
+                        url,
+                        headers=headers,
+                        cookies=cookies
+                    )
+
+                    if response.status_code == 401:
+                        raise KaspiAuthError("Authentication failed - session expired")
+
+                    if response.status_code == 429:
+                        # Rate limited - wait and retry
+                        wait_time = random.uniform(0.5, 2.0)
+                        logger.warning(f"Rate limited, waiting {wait_time:.2f}s (retry {retries + 1}/{max_retries})")
+                        await asyncio.sleep(wait_time)
+                        retries += 1
+                        continue
+
+                    response.raise_for_status()
+
+                    data = response.json()
+                    offers = data.get('data', [])
+
+                    if not offers:
+                        # No more products
+                        logger.info(f"Retrieved {len(all_offers)} total products")
+                        return all_offers
+
+                    # Map offers to internal format
+                    for offer in offers:
+                        all_offers.append(_map_offer(offer))
+
+                    logger.info(f"Retrieved {len(offers)} products from page {page}")
+                    page += 1
+                    break  # Success, move to next page
+
+                except httpx.HTTPStatusError as e:
+                    if e.response.status_code == 429 and retries < max_retries:
+                        retries += 1
+                        continue
+                    logger.error(f"HTTP error fetching products: {e}")
+                    raise
+                except httpx.HTTPError as e:
+                    logger.error(f"Error fetching products: {e}")
+                    raise
+
+            if retries >= max_retries:
+                logger.error("Max retries exceeded for rate limiting")
+                raise httpx.HTTPError("Too many rate limit retries")
+
+    return all_offers
+
+
+async def parse_product_by_sku(sku: str, session: dict) -> dict:
+    """
+    Parse product details by SKU using browser farm.
+
+    Args:
+        sku: Product SKU to fetch
+        session: Session data (optional, used for authenticated requests)
+
+    Returns:
+        Product data with offers and prices
+
+    Raises:
+        Exception: If parsing fails
+    """
+    logger.info(f"Parsing product by SKU: {sku}")
+
+    browser_farm = await get_browser_farm()
+    rate_limiter = get_global_rate_limiter()
+
+    # Acquire rate limit token
+    await rate_limiter.acquire()
+
+    # Use browser farm to fetch SKU data
+    headers = _get_random_headers(sku)
+    url = f"{settings.kaspi_api_base_url}/merchants/products/{sku}/offers"
+
+    try:
+        # Make request through browser farm
+        result = await browser_farm.post_json(
+            url=url,
+            json_body={},
+            headers=headers
+        )
+
+        logger.debug(f"Successfully fetched product {sku}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error parsing product {sku}: {e}")
+        raise
+
+
+async def sync_product(
+    product_id: str,
+    new_price: int,
+    session: dict
+) -> dict:
+    """
+    Sync product price to Kaspi.
+
+    Args:
+        product_id: Internal product UUID
+        new_price: New price to set
+        session: Session data with cookies
+
+    Returns:
+        Success response
+
+    Raises:
+        KaspiAuthError: If session is invalid
+        httpx.HTTPError: If API request fails
+    """
+    logger.info(f"Syncing product {product_id} with price {new_price}")
+
+    # Get product data from database
+    pool = await get_db_pool()
+    async with pool.acquire() as conn:
+        row = await conn.fetchrow(
+            """
+            SELECT id, kaspi_product_id, kaspi_sku, price, store_id
+            FROM products
+            WHERE id = $1
+            """,
+            product_id
+        )
+
+    if not row:
+        raise ValueError(f"Product {product_id} not found")
+
+    # Get session data
+    cookies = _get_cookies_from_session(session)
+    if not cookies:
+        raise KaspiAuthError("No cookies found in session")
+
+    merchant_uid = _get_merchant_uid_from_session(session)
+    if not merchant_uid:
+        raise KaspiAuthError("No merchant UID in session")
+
+    # Prepare price update request
+    headers = _get_merchant_headers()
+    url = "https://mc.shop.kaspi.kz/pricefeed/upload/merchant/process"
+
+    body = {
+        "merchantUid": merchant_uid,
+        "availabilities": [
+            {
+                "available": "yes",
+                "storeId": f"{merchant_uid}_PP1",
+                "stockEnabled": False
+            }
+        ],
+        "sku": row["kaspi_sku"],
+        "price": new_price
+    }
+
+    rate_limiter = get_global_rate_limiter()
+    await rate_limiter.acquire()
+
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        try:
+            response = await client.post(
+                url,
+                json=body,
+                headers=headers,
+                cookies=cookies
+            )
+
+            if response.status_code == 401:
+                raise KaspiAuthError("Authentication failed - session expired")
+
+            response.raise_for_status()
+            response_data = response.json()
+
+            # Update price in database
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    """
+                    UPDATE products
+                    SET price = $1, updated_at = NOW()
+                    WHERE id = $2
+                    """,
+                    new_price,
+                    product_id
+                )
+
+            logger.info(f"Successfully synced product {product_id} with price {new_price}")
+
+            return {
+                "success": True,
+                "product_id": product_id,
+                "new_price": new_price,
+                "response": response_data
+            }
+
+        except httpx.HTTPError as e:
+            logger.error(f"Error syncing product: {e}")
+            raise
+
+
+async def get_competitor_price(sku: str) -> Optional[int]:
+    """
+    Get lowest competitor price for a SKU.
+
+    Args:
+        sku: Product SKU
+
+    Returns:
+        Lowest competitor price or None if not found
+    """
+    logger.info(f"Fetching competitor price for SKU: {sku}")
+
+    try:
+        # Parse product to get all offers
+        product_data = await parse_product_by_sku(sku, session={})
+
+        if not product_data or 'offers' not in product_data:
+            logger.warning(f"No offers found for SKU {sku}")
+            return None
+
+        offers = product_data['offers']
+        if not offers:
+            return None
+
+        # Find minimum price from offers
+        prices = [offer.get('price') for offer in offers if offer.get('price')]
+        if not prices:
+            return None
+
+        min_price = min(prices)
+        logger.info(f"Lowest competitor price for {sku}: {min_price}")
+        return min_price
+
+    except Exception as e:
+        logger.error(f"Error getting competitor price for {sku}: {e}")
+        return None
+
+
+async def fetch_preorders(
+    merchant_id: str,
+    session: dict,
+    limit: Optional[int] = None,
+    offset: int = 0
+) -> List[dict]:
+    """
+    Fetch preorders for a store from database.
+
+    Args:
+        merchant_id: Merchant/Store ID
+        session: Session data (for future API integration)
+        limit: Maximum number of preorders to fetch
+        offset: Offset for pagination
+
+    Returns:
+        List of preorders
+
+    Raises:
+        Exception: If database query fails
+    """
+    logger.info(f"Fetching preorders for merchant {merchant_id}")
+
+    pool = await get_db_pool()
+
+    try:
+        # Get store_id from merchant_id
+        async with pool.acquire() as conn:
+            store_row = await conn.fetchrow(
+                """
+                SELECT id FROM kaspi_stores
+                WHERE merchant_id = $1
+                """,
+                merchant_id
+            )
+
+            if not store_row:
+                logger.warning(f"Store not found for merchant {merchant_id}")
+                return []
+
+            store_id = store_row['id']
+
+            # Fetch preorders
+            rows = await conn.fetch(
+                """
+                SELECT
+                    id,
+                    product_id,
+                    store_id,
+                    article,
+                    name,
+                    brand,
+                    price,
+                    status,
+                    warehouses,
+                    delivery_days,
+                    created_at,
+                    updated_at
+                FROM preorders
+                WHERE store_id = $1
+                ORDER BY created_at DESC
+                OFFSET $2
+                LIMIT COALESCE($3, 9223372036854775807)
+                """,
+                store_id,
+                offset,
+                limit
+            )
+
+        # Format results
+        result = []
+        for row in rows:
+            item = dict(row)
+
+            # Parse warehouses JSON if needed
+            if isinstance(item.get('warehouses'), str):
+                try:
+                    item['warehouses'] = json.loads(item['warehouses'])
+                except (json.JSONDecodeError, TypeError):
+                    item['warehouses'] = []
+            elif item.get('warehouses') is None:
+                item['warehouses'] = []
+
+            result.append(item)
+
+        logger.info(f"Retrieved {len(result)} preorders for merchant {merchant_id}")
+        return result
+
+    except Exception as e:
+        logger.error(f"Error fetching preorders: {e}")
+        raise
+
+
+# ============================================================================
+# Additional Helper Functions
+# ============================================================================
+
+async def validate_merchant_session(merchant_id: str) -> bool:
+    """
+    Validate that a merchant's session is still active.
+
+    Args:
+        merchant_id: Merchant UID
+
+    Returns:
+        True if session is valid, False otherwise
+    """
+    try:
+        session = await get_active_session(merchant_id)
+        if not session:
+            return False
+
+        return await validate_session(session)
+
+    except Exception as e:
+        logger.error(f"Error validating merchant session: {e}")
+        return False
+
+
+async def get_merchant_session(merchant_id: str) -> Optional[dict]:
+    """
+    Get active session for a merchant.
+
+    Args:
+        merchant_id: Merchant UID
+
+    Returns:
+        Session data or None if not found/invalid
+    """
+    try:
+        return await get_active_session(merchant_id)
+    except Exception as e:
+        logger.error(f"Error getting merchant session: {e}")
+        return None
+
+
+# ============================================================================
+# Batch Operations
+# ============================================================================
+
+async def batch_sync_products(
+    product_updates: List[Dict[str, Any]],
+    session: dict,
+    batch_size: int = 10
+) -> Dict[str, Any]:
+    """
+    Sync multiple products in batches.
+
+    Args:
+        product_updates: List of {product_id, new_price} dicts
+        session: Session data with cookies
+        batch_size: Number of products to sync concurrently
+
+    Returns:
+        Summary of sync results
+    """
+    logger.info(f"Batch syncing {len(product_updates)} products")
+
+    results = {
+        'success': [],
+        'failed': [],
+        'total': len(product_updates)
+    }
+
+    # Process in batches
+    for i in range(0, len(product_updates), batch_size):
+        batch = product_updates[i:i + batch_size]
+
+        tasks = [
+            sync_product(
+                product_id=update['product_id'],
+                new_price=update['new_price'],
+                session=session
+            )
+            for update in batch
+        ]
+
+        batch_results = await asyncio.gather(*tasks, return_exceptions=True)
+
+        for update, result in zip(batch, batch_results):
+            if isinstance(result, Exception):
+                logger.error(f"Failed to sync {update['product_id']}: {result}")
+                results['failed'].append({
+                    'product_id': update['product_id'],
+                    'error': str(result)
+                })
+            else:
+                results['success'].append(update['product_id'])
+
+        # Small delay between batches to avoid rate limiting
+        if i + batch_size < len(product_updates):
+            await asyncio.sleep(0.5)
+
+    logger.info(
+        f"Batch sync complete: {len(results['success'])} successful, "
+        f"{len(results['failed'])} failed"
+    )
+
+    return results
