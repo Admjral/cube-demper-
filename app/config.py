@@ -25,12 +25,12 @@ class Settings(BaseSettings):
 
     # Database
     postgres_host: str = "localhost"
-    postgres_port: int = 5432
+    postgres_port: Optional[int] = 5432
     postgres_db: str = "cube_demper"
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
-    db_pool_min_size: int = 10
-    db_pool_max_size: int = 50
+    db_pool_min_size: Optional[int] = 10
+    db_pool_max_size: Optional[int] = 50
 
     @property
     def database_url(self) -> str:
@@ -41,8 +41,8 @@ class Settings(BaseSettings):
 
     # Redis
     redis_host: str = "localhost"
-    redis_port: int = 6379
-    redis_db: int = 0
+    redis_port: Optional[int] = 6379
+    redis_db: Optional[int] = 0
     redis_password: Optional[str] = None
 
     @property
