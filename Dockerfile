@@ -45,9 +45,9 @@ RUN mkdir -p logs
 # Expose port (Railway will override with $PORT)
 EXPOSE 8010
 
-# Health check
-HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
-  CMD curl -f http://localhost:8010/health || exit 1
+# Health check disabled - Railway has its own healthcheck
+# HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
+#   CMD curl -f http://localhost:$PORT/health || exit 1
 
 # Start command (Railway will use railway.json startCommand)
 CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8010"]
