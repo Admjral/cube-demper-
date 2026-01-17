@@ -74,7 +74,7 @@ class Settings(BaseSettings):
     max_concurrency_per_proxy: int = 8
     request_timeout_ms: int = 15000
     idle_context_ttl: int = 300
-    global_rps: int = 120
+    global_rps: int = 60  # ✅ Reduced from 120 to be more conservative (anti-ban)
 
     # Kaspi API
     kaspi_api_base_url: str = "https://kaspi.kz/shop/api"

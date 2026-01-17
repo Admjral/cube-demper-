@@ -9,6 +9,14 @@ import httpx
 
 from ..config import settings
 from .rate_limiter import get_global_rate_limiter
+from .anti_ban import (
+    get_random_user_agent,
+    random_delay,
+    get_global_throttler,
+    is_potential_ban,
+    should_retry_on_status,
+    exponential_backoff_delay
+)
 
 logger = logging.getLogger(__name__)
 
@@ -64,10 +72,10 @@ class BrowserShard:
                 self.contexts[proxy_key] = (context, datetime.now())
                 return context
 
-            # Create new context
+            # Create new context with random User-Agent (anti-ban)
             context = await self.browser.new_context(
                 proxy=proxy,
-                user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+                user_agent=get_random_user_agent(),  # ✅ Rotate UA
                 viewport={'width': 1920, 'height': 1080},
                 locale='ru-RU',
                 timezone_id='Asia/Almaty',
@@ -82,45 +90,106 @@ class BrowserShard:
         url: str,
         json_body: dict,
         headers: Optional[dict] = None,
-        proxy: Optional[Dict[str, str]] = None
+        proxy: Optional[Dict[str, str]] = None,
+        max_retries: int = 3
     ) -> dict:
         """
-        Make POST request with JSON body using browser context.
+        Make POST request with JSON body using browser context with anti-ban protections.
 
         Args:
             url: Request URL
             json_body: JSON body
             headers: Optional headers
             proxy: Optional proxy configuration
+            max_retries: Maximum retry attempts
 
         Returns:
             Response JSON
+
+        Raises:
+            RuntimeError: If all retries exhausted or permanent ban detected
         """
         # Acquire rate limit token
         rate_limiter = get_global_rate_limiter()
         await rate_limiter.acquire()
 
+        # Get global throttler for adaptive delays
+        throttler = get_global_throttler()
+        await throttler.wait()  # ✅ Add adaptive delay before request
+
+        # Add random jitter (500-2000ms) to appear more human
+        await random_delay(500, 2000)  # ✅ Random delay
+
         context = await self.get_context(proxy)
-        page = await context.new_page()
 
-        try:
-            # Set extra headers
-            if headers:
-                await page.set_extra_http_headers(headers)
+        for attempt in range(max_retries):
+            page = await context.new_page()
 
-            # Make request
-            response = await page.request.post(
-                url,
-                data=json_body,
-                timeout=settings.request_timeout_ms
-            )
+            try:
+                # Set extra headers
+                if headers:
+                    await page.set_extra_http_headers(headers)
 
-            # Parse JSON response
-            result = await response.json()
-            return result
+                # Make request
+                response = await page.request.post(
+                    url,
+                    data=json_body,
+                    timeout=settings.request_timeout_ms
+                )
 
-        finally:
-            await page.close()
+                status_code = response.status
+
+                # Check for successful response
+                if 200 <= status_code < 300:
+                    await throttler.on_success()  # ✅ Decrease delay on success
+                    result = await response.json()
+                    return result
+
+                # Check for potential ban
+                response_text = await response.text()
+                if is_potential_ban(status_code, response_text):
+                    logger.critical(
+                        f"🚨 POTENTIAL BAN DETECTED! Status: {status_code}, "
+                        f"URL: {url}, Response: {response_text[:200]}"
+                    )
+                    # Don't retry on ban - fail fast and alert
+                    raise RuntimeError(
+                        f"Potential IP ban detected (status {status_code}). "
+                        f"Consider adding proxy rotation."
+                    )
+
+                # Check if should retry
+                if should_retry_on_status(status_code):
+                    logger.warning(
+                        f"Retryable error {status_code} on {url} "
+                        f"(attempt {attempt + 1}/{max_retries})"
+                    )
+
+                    if status_code == 429:
+                        await throttler.on_rate_limit()  # ✅ Increase delay significantly
+                    else:
+                        await throttler.on_server_error()  # ✅ Increase delay moderately
+
+                    # Exponential backoff before retry
+                    if attempt < max_retries - 1:
+                        await exponential_backoff_delay(attempt)
+                        await page.close()
+                        continue
+
+                # Non-retryable error
+                raise RuntimeError(
+                    f"Request failed with status {status_code}: {response_text[:500]}"
+                )
+
+            except Exception as e:
+                await page.close()
+                if attempt == max_retries - 1:
+                    raise
+                logger.warning(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
+                await exponential_backoff_delay(attempt)
+            finally:
+                if page and not page.is_closed():
+                    await page.close()
 
     async def garbage_collect(self):
         """Close idle contexts older than TTL"""
