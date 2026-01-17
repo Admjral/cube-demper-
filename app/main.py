@@ -17,7 +17,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """Lifecycle manager for FastAPI app"""
     # Startup
-    logger.info(f"Starting {settings.app_name} v{settings.app_version}")
+    logger.info(f"Starting {settings.app_name} v{settings.app_version} on Railway")
 
     try:
         # Initialize database pool
