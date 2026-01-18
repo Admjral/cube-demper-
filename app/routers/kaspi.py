@@ -378,7 +378,7 @@ async def list_products(
                 min_profit=p['min_profit'],
                 bot_active=p['bot_active'],
                 last_check_time=p['last_check_time'],
-                availabilities=p['availabilities'],
+                availabilities=json.loads(p['availabilities']) if isinstance(p['availabilities'], str) else p['availabilities'],
                 created_at=p['created_at'],
                 updated_at=p['updated_at']
             )
