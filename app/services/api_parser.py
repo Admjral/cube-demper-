@@ -294,11 +294,11 @@ async def get_products(
 
 async def parse_product_by_sku(sku: str, session: dict) -> dict:
     """
-    Parse product details by SKU using browser farm.
+    Parse product details by SKU using httpx with session cookies.
 
     Args:
         sku: Product SKU to fetch
-        session: Session data (optional, used for authenticated requests)
+        session: Session data with cookies for authenticated requests
 
     Returns:
         Product data with offers and prices
@@ -308,30 +308,57 @@ async def parse_product_by_sku(sku: str, session: dict) -> dict:
     """
     logger.info(f"Parsing product by SKU: {sku}")
 
-    browser_farm = await get_browser_farm()
     rate_limiter = get_global_rate_limiter()
 
     # Acquire rate limit token
     await rate_limiter.acquire()
 
-    # Use browser farm to fetch SKU data
+    # Get cookies from session
+    cookies = _get_cookies_from_session(session)
+    if not cookies:
+        raise KaspiAuthError("No cookies found in session for parse_product_by_sku")
+
+    # Build headers with cookies
     headers = _get_random_headers(sku)
     url = f"{settings.kaspi_api_base_url}/merchants/products/{sku}/offers"
 
-    try:
-        # Make request through browser farm
-        result = await browser_farm.post_json(
-            url=url,
-            json_body={},
-            headers=headers
-        )
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as client:
+                response = await client.post(
+                    url,
+                    json={},
+                    headers=headers,
+                    cookies=cookies
+                )
 
-        logger.debug(f"Successfully fetched product {sku}")
-        return result
+                if response.status_code == 401:
+                    raise httpx.HTTPError(f"Request failed with status 401: {response.text}")
 
-    except Exception as e:
-        logger.error(f"Error parsing product {sku}: {e}")
-        raise
+                if response.status_code == 429:
+                    # Rate limited - wait and retry
+                    wait_time = 2 ** attempt
+                    logger.warning(f"Rate limited, waiting {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    continue
+
+                response.raise_for_status()
+                result = response.json()
+                logger.debug(f"Successfully fetched product {sku}")
+                return result
+
+        except httpx.HTTPError as e:
+            if attempt < max_retries - 1:
+                wait_time = 1 + attempt
+                logger.warning(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
+                logger.info(f"Exponential backoff (attempt {attempt}): {wait_time:.2f}s")
+                await asyncio.sleep(wait_time)
+            else:
+                logger.error(f"Error parsing product {sku}: {e}")
+                raise
+
+    raise Exception(f"Failed to fetch product {sku} after {max_retries} attempts")
 
 
 async def sync_product(
