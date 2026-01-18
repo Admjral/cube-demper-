@@ -292,13 +292,15 @@ async def get_products(
     return all_offers
 
 
-async def parse_product_by_sku(sku: str, session: dict) -> dict:
+async def parse_product_by_sku(product_id: str, session: dict = None) -> dict:
     """
-    Parse product details by SKU using httpx with session cookies.
+    Parse product details by product ID using Kaspi public offers API.
+
+    This uses the public yml/offer-view API which doesn't require authentication.
 
     Args:
-        sku: Product SKU to fetch
-        session: Session data with cookies for authenticated requests
+        product_id: Kaspi product ID (external_kaspi_id)
+        session: Optional session data (not required for public API)
 
     Returns:
         Product data with offers and prices
@@ -306,21 +308,33 @@ async def parse_product_by_sku(sku: str, session: dict) -> dict:
     Raises:
         Exception: If parsing fails
     """
-    logger.info(f"Parsing product by SKU: {sku}")
+    logger.info(f"Fetching offers for product ID: {product_id}")
 
     rate_limiter = get_global_rate_limiter()
 
     # Acquire rate limit token
     await rate_limiter.acquire()
 
-    # Get cookies from session
-    cookies = _get_cookies_from_session(session)
-    if not cookies:
-        raise KaspiAuthError("No cookies found in session for parse_product_by_sku")
+    # Use public offers API (no auth required)
+    url = f"https://kaspi.kz/yml/offer-view/offers/{product_id}"
 
-    # Build headers with cookies
-    headers = _get_random_headers(sku)
-    url = f"{settings.kaspi_api_base_url}/merchants/products/{sku}/offers"
+    # Standard headers for public API
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "accept-encoding": "gzip, deflate, br",
+        "accept-language": "ru-RU,ru;q=0.9",
+        "content-type": "application/json",
+        "user-agent": random.choice(USER_AGENTS),
+        "x-ks-city": "750000000",  # Almaty
+        "origin": "https://kaspi.kz",
+        "referer": f"https://kaspi.kz/shop/p/-{product_id}/",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+    }
+
+    # Request body with city
+    body = {"cityId": "750000000"}
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -328,13 +342,11 @@ async def parse_product_by_sku(sku: str, session: dict) -> dict:
             async with httpx.AsyncClient(timeout=30.0) as client:
                 response = await client.post(
                     url,
-                    json={},
-                    headers=headers,
-                    cookies=cookies
+                    json=body,
+                    headers=headers
                 )
 
-                if response.status_code == 401:
-                    raise httpx.HTTPError(f"Request failed with status 401: {response.text}")
+                logger.debug(f"Response status: {response.status_code}")
 
                 if response.status_code == 429:
                     # Rate limited - wait and retry
@@ -343,22 +355,25 @@ async def parse_product_by_sku(sku: str, session: dict) -> dict:
                     await asyncio.sleep(wait_time)
                     continue
 
+                if response.status_code == 400:
+                    logger.warning(f"Bad request for product {product_id}: {response.text}")
+                    return None
+
                 response.raise_for_status()
                 result = response.json()
-                logger.debug(f"Successfully fetched product {sku}")
+                logger.debug(f"Successfully fetched offers for product {product_id}: {len(result.get('offers', []))} offers")
                 return result
 
         except httpx.HTTPError as e:
             if attempt < max_retries - 1:
                 wait_time = 1 + attempt
                 logger.warning(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
-                logger.info(f"Exponential backoff (attempt {attempt}): {wait_time:.2f}s")
                 await asyncio.sleep(wait_time)
             else:
-                logger.error(f"Error parsing product {sku}: {e}")
+                logger.error(f"Error fetching offers for product {product_id}: {e}")
                 raise
 
-    raise Exception(f"Failed to fetch product {sku} after {max_retries} attempts")
+    raise Exception(f"Failed to fetch offers for product {product_id} after {max_retries} attempts")
 
 
 async def sync_product(
@@ -468,24 +483,24 @@ async def sync_product(
             raise
 
 
-async def get_competitor_price(sku: str) -> Optional[int]:
+async def get_competitor_price(product_id: str) -> Optional[int]:
     """
-    Get lowest competitor price for a SKU.
+    Get lowest competitor price for a product.
 
     Args:
-        sku: Product SKU
+        product_id: Kaspi product ID (external_kaspi_id)
 
     Returns:
         Lowest competitor price or None if not found
     """
-    logger.info(f"Fetching competitor price for SKU: {sku}")
+    logger.info(f"Fetching competitor price for product ID: {product_id}")
 
     try:
         # Parse product to get all offers
-        product_data = await parse_product_by_sku(sku, session={})
+        product_data = await parse_product_by_sku(product_id)
 
         if not product_data or 'offers' not in product_data:
-            logger.warning(f"No offers found for SKU {sku}")
+            logger.warning(f"No offers found for product {product_id}")
             return None
 
         offers = product_data['offers']
@@ -497,12 +512,12 @@ async def get_competitor_price(sku: str) -> Optional[int]:
         if not prices:
             return None
 
-        min_price = min(prices)
-        logger.info(f"Lowest competitor price for {sku}: {min_price}")
+        min_price = int(min(prices))
+        logger.info(f"Lowest competitor price for product {product_id}: {min_price}")
         return min_price
 
     except Exception as e:
-        logger.error(f"Error getting competitor price for {sku}: {e}")
+        logger.error(f"Error getting competitor price for {product_id}: {e}")
         return None
 
 
