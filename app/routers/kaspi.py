@@ -644,17 +644,15 @@ async def check_product_demping(
 ):
     """
     Manually trigger demping check for a specific product.
-    This simulates what the DemperWorker does for testing purposes.
-    Returns competitor prices and suggested price adjustment.
+    Returns current settings without making changes.
     """
     async with pool.acquire() as conn:
-        # Get product with store info and demping settings
         product = await conn.fetchrow(
             """
             SELECT
                 p.*,
                 ks.merchant_id,
-                COALESCE(ds.price_step, 100) as store_price_step,
+                COALESCE(ds.price_step, 1) as store_price_step,
                 COALESCE(ds.min_margin_percent, 5) as store_min_margin_percent
             FROM products p
             JOIN kaspi_stores ks ON ks.id = p.store_id
@@ -671,15 +669,12 @@ async def check_product_demping(
                 detail="Product not found"
             )
 
-        # Get product settings
         current_price = product['price']
         min_price = product['min_price'] or product['min_profit']
         max_price = product['max_price']
         price_step = product['price_step_override'] or product['store_price_step']
         strategy = product['demping_strategy'] or 'standard'
 
-        # For now, return a simulated response
-        # In production, this would call the Kaspi API to get competitor prices
         return {
             "status": "success",
             "product_id": product_id,
@@ -690,9 +685,222 @@ async def check_product_demping(
             "price_step": price_step,
             "strategy": strategy,
             "bot_active": product['bot_active'],
-            "message": "Демпинг проверка выполнена. Для реальной проверки цен конкурентов требуется интеграция с Kaspi API.",
+            "message": "Настройки демпинга получены",
             "last_check_time": product['last_check_time']
         }
+
+
+@router.post("/products/{product_id}/run-demping")
+async def run_product_demping(
+    product_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """
+    Manually run demping for a specific product.
+    Fetches competitor prices from Kaspi and updates price if needed.
+    """
+    async with pool.acquire() as conn:
+        # Get product with store info
+        product = await conn.fetchrow(
+            """
+            SELECT
+                p.*,
+                ks.merchant_id,
+                ks.guid,
+                COALESCE(ds.price_step, 1) as store_price_step
+            FROM products p
+            JOIN kaspi_stores ks ON ks.id = p.store_id
+            LEFT JOIN demping_settings ds ON ds.store_id = p.store_id
+            WHERE p.id = $1 AND ks.user_id = $2
+            """,
+            uuid.UUID(product_id),
+            current_user['id']
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found"
+            )
+
+        external_id = product['external_kaspi_id']
+        merchant_id = product['merchant_id']
+        current_price = product['price']
+        min_price = product['min_price'] or product['min_profit'] or 0
+        max_price = product['max_price']
+        price_step = product['price_step_override'] or product['store_price_step']
+        strategy = product['demping_strategy'] or 'standard'
+
+        # Get session for this store
+        session = await get_active_session(merchant_id)
+        if not session:
+            return {
+                "status": "error",
+                "message": f"Нет активной сессии для магазина {merchant_id}. Требуется повторная авторизация.",
+                "product_id": product_id,
+                "current_price": current_price
+            }
+
+        # Fetch competitor prices from Kaspi
+        try:
+            product_data = await parse_product_by_sku(str(external_id), session)
+        except Exception as e:
+            logger.error(f"Error fetching competitor prices: {e}")
+            return {
+                "status": "error",
+                "message": f"Ошибка получения цен конкурентов: {str(e)}",
+                "product_id": product_id,
+                "current_price": current_price
+            }
+
+        if not product_data:
+            return {
+                "status": "no_data",
+                "message": "Не удалось получить данные о товаре от Kaspi",
+                "product_id": product_id,
+                "current_price": current_price
+            }
+
+        # Extract offers
+        offers = product_data.get("offers", []) if isinstance(product_data, dict) else product_data
+
+        if not offers:
+            return {
+                "status": "no_offers",
+                "message": "Нет предложений конкурентов",
+                "product_id": product_id,
+                "current_price": current_price,
+                "offers_count": 0
+            }
+
+        # Find minimum competitor price (excluding our offer)
+        min_competitor_price = None
+        our_position = None
+        sorted_offers = []
+
+        for i, offer in enumerate(offers):
+            offer_merchant_id = offer.get("merchantId")
+            offer_price = offer.get("price")
+
+            if offer_price is not None:
+                sorted_offers.append({
+                    "merchant_id": offer_merchant_id,
+                    "price": offer_price,
+                    "is_ours": offer_merchant_id == merchant_id
+                })
+
+                if offer_merchant_id == merchant_id:
+                    our_position = i + 1
+                elif min_competitor_price is None or offer_price < min_competitor_price:
+                    min_competitor_price = offer_price
+
+        # Sort by price
+        sorted_offers.sort(key=lambda x: x['price'])
+
+        if min_competitor_price is None:
+            return {
+                "status": "no_competitors",
+                "message": "Вы единственный продавец",
+                "product_id": product_id,
+                "current_price": current_price,
+                "offers": sorted_offers[:5]
+            }
+
+        # Calculate target price based on strategy
+        if strategy == 'always_first':
+            target_price = min_competitor_price - 1  # На 1 тенге дешевле
+        elif strategy == 'stay_top_n':
+            top_position = (product['strategy_params'] or {}).get('top_position', 3)
+            prices = [o['price'] for o in sorted_offers if not o['is_ours']]
+            if len(prices) >= top_position:
+                target_price = prices[top_position - 1] - 1
+            else:
+                target_price = prices[-1] - 1 if prices else current_price
+        else:  # standard
+            target_price = min_competitor_price - price_step
+
+        # Apply min/max constraints
+        if target_price < min_price:
+            target_price = min_price
+        if max_price and target_price > max_price:
+            target_price = max_price
+
+        # Check if update is needed
+        if target_price >= current_price:
+            return {
+                "status": "no_change",
+                "message": f"Изменение не требуется. Целевая цена ({target_price}) >= текущей ({current_price})",
+                "product_id": product_id,
+                "current_price": current_price,
+                "target_price": target_price,
+                "min_competitor_price": min_competitor_price,
+                "strategy": strategy,
+                "offers": sorted_offers[:5]
+            }
+
+        # Update price via Kaspi API
+        try:
+            sync_result = await sync_product(
+                product_id=str(product['id']),
+                new_price=int(target_price),
+                session=session
+            )
+
+            if not sync_result or not sync_result.get("success"):
+                return {
+                    "status": "sync_failed",
+                    "message": "Не удалось обновить цену в Kaspi",
+                    "product_id": product_id,
+                    "current_price": current_price,
+                    "target_price": target_price
+                }
+
+            # Record price change
+            await conn.execute(
+                """
+                INSERT INTO price_history (
+                    id, product_id, old_price, new_price,
+                    competitor_price, change_reason, created_at
+                )
+                VALUES (gen_random_uuid(), $1, $2, $3, $4, 'demper', NOW())
+                """,
+                uuid.UUID(product_id),
+                current_price,
+                int(target_price),
+                int(min_competitor_price)
+            )
+
+            # Update product price in DB
+            await conn.execute(
+                """
+                UPDATE products
+                SET price = $1, last_check_time = NOW(), updated_at = NOW()
+                WHERE id = $2
+                """,
+                int(target_price),
+                uuid.UUID(product_id)
+            )
+
+            return {
+                "status": "success",
+                "message": f"Цена успешно обновлена: {current_price} → {target_price} ₸",
+                "product_id": product_id,
+                "old_price": current_price,
+                "new_price": int(target_price),
+                "min_competitor_price": min_competitor_price,
+                "strategy": strategy,
+                "offers": sorted_offers[:5]
+            }
+
+        except Exception as e:
+            logger.error(f"Error updating price: {e}")
+            return {
+                "status": "error",
+                "message": f"Ошибка обновления цены: {str(e)}",
+                "product_id": product_id,
+                "current_price": current_price
+            }
 
 
 @router.get("/analytics", response_model=ProductAnalytics)
