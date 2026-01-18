@@ -545,3 +545,143 @@ async def get_active_session(merchant_id: str) -> Optional[dict]:
     except Exception as e:
         logger.error(f"Error getting active session: {e}")
         return None
+
+
+async def get_active_session_with_refresh(merchant_id: str, auto_refresh: bool = True) -> Optional[dict]:
+    """
+    Get active session for a merchant, with automatic refresh if expired.
+
+    This function will:
+    1. Get the session from database
+    2. Validate it
+    3. If invalid and auto_refresh=True, attempt to re-authenticate using stored credentials
+    4. If SMS required, mark store as needing re-auth and return None
+
+    Args:
+        merchant_id: Merchant ID
+        auto_refresh: Whether to attempt automatic re-authentication
+
+    Returns:
+        Optional[dict]: Decrypted session data or None if not found/invalid/requires SMS
+    """
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                SELECT id, guid, name FROM kaspi_stores
+                WHERE merchant_id = $1 AND is_active = true
+                """,
+                merchant_id
+            )
+
+            if not row or not row['guid']:
+                logger.warning(f"No session found for merchant {merchant_id}")
+                return None
+
+            # Decrypt session data to get credentials
+            session_data = None
+            if isinstance(row['guid'], dict) and 'encrypted' in row['guid']:
+                session_data = decrypt_session(row['guid']['encrypted'])
+            elif isinstance(row['guid'], str):
+                session_data = decrypt_session(row['guid'])
+            else:
+                session_data = row['guid']
+
+            if not session_data:
+                logger.warning(f"Could not decrypt session for merchant {merchant_id}")
+                return None
+
+            # Validate session
+            is_valid = await validate_session(row['guid'])
+
+            if is_valid:
+                return session_data
+
+            # Session expired - attempt refresh if enabled
+            if not auto_refresh:
+                logger.warning(f"Session for merchant {merchant_id} expired, auto_refresh disabled")
+                return None
+
+            logger.info(f"Session for merchant {merchant_id} expired, attempting auto-refresh...")
+
+            # Get stored credentials
+            email = session_data.get('email')
+            password = session_data.get('password')
+
+            if not email or not password:
+                logger.error(f"No credentials stored for merchant {merchant_id}, cannot auto-refresh")
+                # Mark store as needing re-authentication
+                await conn.execute(
+                    """
+                    UPDATE kaspi_stores
+                    SET needs_reauth = true, reauth_reason = 'credentials_missing', updated_at = NOW()
+                    WHERE merchant_id = $1
+                    """,
+                    merchant_id
+                )
+                return None
+
+            try:
+                # Attempt to re-authenticate
+                new_session = await authenticate_kaspi(email, password, merchant_id)
+
+                # If successful, update database
+                await conn.execute(
+                    """
+                    UPDATE kaspi_stores
+                    SET guid = $1, needs_reauth = false, reauth_reason = NULL, updated_at = NOW()
+                    WHERE merchant_id = $2
+                    """,
+                    json.dumps({'encrypted': new_session['guid']}),
+                    merchant_id
+                )
+
+                logger.info(f"Successfully refreshed session for merchant {merchant_id}")
+
+                # Return decrypted session
+                return decrypt_session(new_session['guid'])
+
+            except KaspiSMSRequiredError as e:
+                # SMS verification needed - mark store and notify
+                logger.warning(f"SMS verification required for merchant {merchant_id}")
+                await conn.execute(
+                    """
+                    UPDATE kaspi_stores
+                    SET needs_reauth = true, reauth_reason = 'sms_required', updated_at = NOW()
+                    WHERE merchant_id = $1
+                    """,
+                    merchant_id
+                )
+                return None
+
+            except KaspiInvalidCredentialsError as e:
+                # Credentials no longer valid
+                logger.error(f"Invalid credentials for merchant {merchant_id}")
+                await conn.execute(
+                    """
+                    UPDATE kaspi_stores
+                    SET needs_reauth = true, reauth_reason = 'invalid_credentials', updated_at = NOW()
+                    WHERE merchant_id = $1
+                    """,
+                    merchant_id
+                )
+                return None
+
+            except KaspiAuthError as e:
+                # Other auth error
+                logger.error(f"Auth error for merchant {merchant_id}: {e}")
+                await conn.execute(
+                    """
+                    UPDATE kaspi_stores
+                    SET needs_reauth = true, reauth_reason = $1, updated_at = NOW()
+                    WHERE merchant_id = $2
+                    """,
+                    str(e)[:200],
+                    merchant_id
+                )
+                return None
+
+    except Exception as e:
+        logger.error(f"Error getting active session with refresh: {e}")
+        return None

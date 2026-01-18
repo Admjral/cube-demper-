@@ -30,6 +30,7 @@ from ..services.kaspi_auth_service import (
     authenticate_kaspi,
     verify_sms_code,
     get_active_session,
+    get_active_session_with_refresh,
     KaspiSMSRequiredError,
     KaspiAuthError,
 )
@@ -732,14 +733,29 @@ async def run_product_demping(
         price_step = product['price_step_override'] or product['store_price_step']
         strategy = product['demping_strategy'] or 'standard'
 
-        # Get session for this store
-        session = await get_active_session(merchant_id)
+        # Get session for this store (with auto-refresh if expired)
+        session = await get_active_session_with_refresh(merchant_id)
         if not session:
+            # Check if it needs re-auth
+            reauth_info = await conn.fetchrow(
+                "SELECT needs_reauth, reauth_reason FROM kaspi_stores WHERE merchant_id = $1",
+                merchant_id
+            )
+            reason = reauth_info['reauth_reason'] if reauth_info else 'unknown'
+            if reason == 'sms_required':
+                message = f"Требуется SMS верификация. Перейдите в раздел Магазины для повторной авторизации."
+            elif reason == 'invalid_credentials':
+                message = f"Неверные учётные данные. Обновите логин/пароль в разделе Магазины."
+            else:
+                message = f"Нет активной сессии для магазина {merchant_id}. Требуется повторная авторизация."
+
             return {
                 "status": "error",
-                "message": f"Нет активной сессии для магазина {merchant_id}. Требуется повторная авторизация.",
+                "message": message,
                 "product_id": product_id,
-                "current_price": current_price
+                "current_price": current_price,
+                "needs_reauth": True,
+                "reauth_reason": reason
             }
 
         # Fetch competitor prices from Kaspi

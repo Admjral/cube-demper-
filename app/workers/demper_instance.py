@@ -41,7 +41,7 @@ from ..core.database import get_db_pool, close_pool
 from ..core.browser_farm import get_browser_farm, close_browser_farm
 from ..core.rate_limiter import get_global_rate_limiter
 from ..services.api_parser import parse_product_by_sku, sync_product, get_merchant_session
-from ..services.kaspi_auth_service import get_active_session
+from ..services.kaspi_auth_service import get_active_session_with_refresh
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +266,12 @@ class DemperWorker:
 
         Uses hash-based sharding: mod(abs(hashtext(id::text)), INSTANCE_COUNT) = INSTANCE_INDEX
 
+        Filters:
+        - Only products with bot_active = true
+        - Only stores that are active and don't need re-auth
+        - Only within store's working hours
+        - Only products that haven't been checked within check_interval_minutes
+
         Returns:
             List of product records
         """
@@ -273,6 +279,8 @@ class DemperWorker:
 
         try:
             async with pool.acquire() as conn:
+                # Get current time in Almaty timezone (UTC+5 for Kazakhstan)
+                # Note: You might want to use proper timezone handling
                 query = """
                     SELECT
                         products.id,
@@ -282,19 +290,50 @@ class DemperWorker:
                         products.external_kaspi_id,
                         products.price,
                         products.min_profit,
+                        products.min_price,
+                        products.max_price,
+                        products.price_step_override,
+                        products.demping_strategy,
+                        products.strategy_params,
                         kaspi_stores.merchant_id,
-                        kaspi_stores.guid
+                        kaspi_stores.guid,
+                        COALESCE(ds.check_interval_minutes, 15) as check_interval_minutes,
+                        COALESCE(ds.work_hours_start, '09:00') as work_hours_start,
+                        COALESCE(ds.work_hours_end, '21:00') as work_hours_end,
+                        COALESCE(ds.price_step, 1) as store_price_step,
+                        COALESCE(ds.is_enabled, true) as demping_enabled
                     FROM products
                     JOIN kaspi_stores ON kaspi_stores.id = products.store_id
+                    LEFT JOIN demping_settings ds ON ds.store_id = products.store_id
                     WHERE products.bot_active = TRUE
                       AND kaspi_stores.is_active = TRUE
                       AND kaspi_stores.guid IS NOT NULL
                       AND products.external_kaspi_id IS NOT NULL
+                      AND COALESCE(kaspi_stores.needs_reauth, false) = FALSE
+                      AND COALESCE(ds.is_enabled, true) = TRUE
+                      -- Check if within working hours (Kazakhstan time, UTC+5)
+                      AND (
+                          COALESCE(ds.work_hours_start, '09:00')::time <= (NOW() AT TIME ZONE 'Asia/Almaty')::time
+                          AND COALESCE(ds.work_hours_end, '21:00')::time >= (NOW() AT TIME ZONE 'Asia/Almaty')::time
+                      )
+                      -- Check if enough time passed since last check
+                      AND (
+                          products.last_check_time IS NULL
+                          OR products.last_check_time < NOW() - (COALESCE(ds.check_interval_minutes, 15) || ' minutes')::interval
+                      )
                       AND mod(abs(hashtext(products.id::text)), $1) = $2
                     ORDER BY products.last_check_time ASC NULLS FIRST
+                    LIMIT 500
                 """
 
                 rows = await conn.fetch(query, self.instance_count, self.instance_index)
+
+                if rows:
+                    logger.info(
+                        f"Found {len(rows)} products ready for checking "
+                        f"(shard {self.instance_index}/{self.instance_count})"
+                    )
+
                 return [dict(row) for row in rows]
 
         except Exception as e:
@@ -353,10 +392,11 @@ class DemperWorker:
         Algorithm:
         1. Fetch competitor prices for the product SKU
         2. Find minimum competitor price
-        3. Calculate new price: min(competitor_price - 100, current_price - 100)
-        4. Ensure new price >= min_profit
-        5. If new price < current price, update via Kaspi API
+        3. Calculate target price based on strategy
+        4. Apply price constraints (min/max)
+        5. If price change needed, update via Kaspi API
         6. Record price change to price_history table
+        7. Update last_check_time
 
         Args:
             product: Product record with all necessary fields
@@ -369,21 +409,36 @@ class DemperWorker:
             sku = product["kaspi_sku"]
             external_id = product["external_kaspi_id"]
             current_price = Decimal(str(product["price"]))
-            min_profit = Decimal(str(product.get("min_profit", 0)))
             merchant_id = product["merchant_id"]
+
+            # Get price constraints from product-level or store-level settings
+            min_price = Decimal(str(product.get("min_price") or product.get("min_profit") or 0))
+            max_price = product.get("max_price")
+            if max_price:
+                max_price = Decimal(str(max_price))
+
+            # Get price step (product override or store default)
+            price_step = Decimal(str(product.get("price_step_override") or product.get("store_price_step") or 1))
+
+            # Get strategy
+            strategy = product.get("demping_strategy") or "standard"
+            strategy_params = product.get("strategy_params") or {}
 
             try:
                 # Small random delay to avoid synchronized bursts
                 await asyncio.sleep(random.uniform(0.01, 0.1))
 
-                # Get session for this store
-                session = await get_active_session(merchant_id)
+                # Get session for this store (with auto-refresh if expired)
+                session = await get_active_session_with_refresh(merchant_id)
                 if not session:
                     logger.warning(f"No active session for merchant {merchant_id}, skipping product {sku}")
                     return False
 
                 # Fetch competitor prices
                 product_data = await parse_product_by_sku(str(external_id), session)
+
+                # Update last_check_time regardless of result
+                await self._update_last_check_time(product_id)
 
                 if not product_data:
                     logger.debug(f"No competitor data for product {sku}")
@@ -400,45 +455,72 @@ class DemperWorker:
                 if merchant_id != '30391544' and len(offers) > 0:
                     logger.info(f"Found {len(offers)} offers for SKU {sku} (merchant {merchant_id})")
 
-                # Find minimum competitor price (excluding our own offer)
-                min_competitor_price = None
-                min_competitor_offer = None
+                # Sort offers by price and find our position
+                sorted_offers = []
+                our_price = None
+                our_position = None
 
                 for offer in offers:
                     offer_merchant_id = offer.get("merchantId")
                     offer_price = offer.get("price")
-
-                    # Skip our own offer
-                    if offer_merchant_id == merchant_id:
-                        continue
-
-                    # Track minimum competitor price
                     if offer_price is not None:
-                        offer_price_decimal = Decimal(str(offer_price))
-                        if min_competitor_price is None or offer_price_decimal < min_competitor_price:
-                            min_competitor_price = offer_price_decimal
-                            min_competitor_offer = offer
+                        sorted_offers.append({
+                            "merchant_id": offer_merchant_id,
+                            "price": Decimal(str(offer_price)),
+                            "is_ours": offer_merchant_id == merchant_id
+                        })
+                        if offer_merchant_id == merchant_id:
+                            our_price = Decimal(str(offer_price))
+
+                sorted_offers.sort(key=lambda x: x["price"])
+
+                # Find our position and competitor prices
+                for i, offer in enumerate(sorted_offers):
+                    if offer["is_ours"]:
+                        our_position = i + 1
+                        break
+
+                # Find minimum competitor price (excluding our own)
+                min_competitor_price = None
+                for offer in sorted_offers:
+                    if not offer["is_ours"]:
+                        min_competitor_price = offer["price"]
+                        break
 
                 if min_competitor_price is None:
                     logger.debug(f"No competitor offers for product {sku}")
                     return False
 
-                # Calculate new price (compete by going 1 KZT below competitor)
-                # Цены хранятся в тенге (целые числа)
-                target_price = min_competitor_price - Decimal('1')
+                # Calculate target price based on strategy
+                target_price = self._calculate_target_price(
+                    strategy=strategy,
+                    strategy_params=strategy_params,
+                    current_price=current_price,
+                    min_competitor_price=min_competitor_price,
+                    sorted_offers=sorted_offers,
+                    our_position=our_position,
+                    price_step=price_step,
+                    merchant_id=merchant_id
+                )
 
-                # Ensure we don't go below minimum profit
-                if target_price < min_profit:
-                    logger.debug(
-                        f"Cannot reduce price for {sku}: target {target_price} < min_profit {min_profit}"
-                    )
+                if target_price is None:
+                    logger.debug(f"No target price calculated for {sku}")
                     return False
 
-                # Only update if new price is lower than current
-                if target_price >= current_price:
+                # Apply price constraints
+                if target_price < min_price:
                     logger.debug(
-                        f"No price update needed for {sku}: target {target_price} >= current {current_price}"
+                        f"Cannot reduce price for {sku}: target {target_price} < min_price {min_price}"
                     )
+                    # Still return False but don't update
+                    return False
+
+                if max_price and target_price > max_price:
+                    target_price = max_price
+
+                # Only update if price changed
+                if target_price == current_price:
+                    logger.debug(f"No price change needed for {sku}: already at {current_price}")
                     return False
 
                 # Update price via Kaspi API
@@ -458,11 +540,11 @@ class DemperWorker:
                     old_price=int(current_price),
                     new_price=int(target_price),
                     competitor_price=int(min_competitor_price),
-                    change_reason="demper"
+                    change_reason=f"demper_{strategy}"
                 )
 
                 logger.info(
-                    f"✓ Demper: Updated {sku} from {current_price} to {target_price} "
+                    f"✓ Demper [{strategy}]: Updated {sku} from {current_price} to {target_price} "
                     f"(competitor: {min_competitor_price})"
                 )
 
@@ -474,6 +556,100 @@ class DemperWorker:
             finally:
                 # Random delay between product processing
                 await asyncio.sleep(random.uniform(0.1, 0.3))
+
+    def _calculate_target_price(
+        self,
+        strategy: str,
+        strategy_params: dict,
+        current_price: Decimal,
+        min_competitor_price: Decimal,
+        sorted_offers: List[Dict],
+        our_position: Optional[int],
+        price_step: Decimal,
+        merchant_id: str
+    ) -> Optional[Decimal]:
+        """
+        Calculate target price based on strategy.
+
+        Strategies:
+        - standard: Beat minimum competitor by price_step
+        - always_first: Always be the cheapest (min_competitor - price_step)
+        - stay_top_n: Stay within top N positions
+
+        Args:
+            strategy: Strategy name
+            strategy_params: Strategy-specific parameters
+            current_price: Current product price
+            min_competitor_price: Minimum competitor price
+            sorted_offers: All offers sorted by price
+            our_position: Our current position (1-indexed)
+            price_step: Price adjustment step
+            merchant_id: Our merchant ID
+
+        Returns:
+            Target price or None if no change needed
+        """
+        if strategy == "standard":
+            # Beat minimum competitor by price_step
+            target = min_competitor_price - price_step
+            # Only reduce price if we're not already the cheapest
+            if current_price <= min_competitor_price:
+                return None
+            return target
+
+        elif strategy == "always_first":
+            # Always be the cheapest
+            target = min_competitor_price - price_step
+            # Only reduce if not already first
+            if our_position == 1:
+                return None
+            return target
+
+        elif strategy == "stay_top_n":
+            # Stay within top N positions
+            top_n = strategy_params.get("top_position", 3)
+
+            # If already in top N, no change needed
+            if our_position is not None and our_position <= top_n:
+                return None
+
+            # Find price of N-th position
+            competitor_count = 0
+            target_price = None
+
+            for offer in sorted_offers:
+                if not offer["is_ours"]:
+                    competitor_count += 1
+                    if competitor_count == top_n:
+                        # Match this price (or go slightly below)
+                        target_price = offer["price"] - price_step
+                        break
+
+            if target_price is None and competitor_count > 0:
+                # Fewer than N competitors, match the last one
+                for offer in reversed(sorted_offers):
+                    if not offer["is_ours"]:
+                        target_price = offer["price"] - price_step
+                        break
+
+            return target_price
+
+        else:
+            logger.warning(f"Unknown strategy: {strategy}, using standard")
+            return min_competitor_price - price_step
+
+    async def _update_last_check_time(self, product_id: UUID):
+        """Update last_check_time for a product."""
+        pool = await get_db_pool()
+
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE products SET last_check_time = NOW() WHERE id = $1",
+                    product_id
+                )
+        except Exception as e:
+            logger.error(f"Error updating last_check_time: {e}", exc_info=True)
 
     async def _record_price_change(
         self,
