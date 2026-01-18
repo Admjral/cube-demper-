@@ -5,6 +5,7 @@ from typing import Annotated, List
 import asyncpg
 import uuid
 import logging
+import json
 
 from ..schemas.kaspi import (
     KaspiStoreResponse,
@@ -94,8 +95,9 @@ async def authenticate_store(
         # Encrypt session data
         encrypted_guid = encrypt_session(session_data)
         merchant_id = session_data.get('merchant_uid')
+        shop_name = session_data.get('shop_name', f"Store {merchant_id}")
 
-        # Store in database
+        # Store in database (wrap encrypted string in JSON object)
         async with pool.acquire() as conn:
             store = await conn.fetchrow(
                 """
@@ -107,8 +109,8 @@ async def authenticate_store(
                 """,
                 current_user['id'],
                 merchant_id,
-                f"Store {merchant_id}",
-                encrypted_guid
+                shop_name,
+                json.dumps({'encrypted': encrypted_guid})
             )
 
         return {
