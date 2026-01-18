@@ -423,8 +423,9 @@ class DemperWorker:
                     logger.debug(f"No competitor offers for product {sku}")
                     return False
 
-                # Calculate new price (compete by going 1 KZT = 100 tiyns below competitor)
-                target_price = min_competitor_price - Decimal('100')
+                # Calculate new price (compete by going 1 KZT below competitor)
+                # Цены хранятся в тенге (целые числа)
+                target_price = min_competitor_price - Decimal('1')
 
                 # Ensure we don't go below minimum profit
                 if target_price < min_profit:
@@ -487,9 +488,9 @@ class DemperWorker:
 
         Args:
             product_id: Product UUID
-            old_price: Previous price (tiyns)
-            new_price: New price (tiyns)
-            competitor_price: Competitor price that triggered change (tiyns)
+            old_price: Previous price (в тенге KZT)
+            new_price: New price (в тенге KZT)
+            competitor_price: Competitor price that triggered change (в тенге KZT)
             change_reason: Reason for change (e.g., "demper", "manual")
         """
         pool = await get_db_pool()
