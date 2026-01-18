@@ -508,12 +508,14 @@ class DemperWorker:
                     return False
 
                 # Apply price constraints
-                if target_price < min_price:
+                # Если min_price не задана (0), используем минимум 1 тенге
+                effective_min_price = min_price if min_price > 0 else Decimal("1")
+                if target_price < effective_min_price:
+                    # Ставим минимальную цену вместо отказа
+                    target_price = effective_min_price
                     logger.debug(
-                        f"Cannot reduce price for {sku}: target {target_price} < min_price {min_price}"
+                        f"Target price for {sku} adjusted to min_price: {target_price}"
                     )
-                    # Still return False but don't update
-                    return False
 
                 if max_price and target_price > max_price:
                     target_price = max_price

@@ -855,20 +855,22 @@ async def run_product_demping(
 
         # Calculate target price based on strategy
         if strategy == 'always_first':
-            target_price = min_competitor_price - 1  # На 1 тенге дешевле
+            target_price = min_competitor_price - price_step  # На price_step дешевле
         elif strategy == 'stay_top_n':
             top_position = (product['strategy_params'] or {}).get('top_position', 3)
             prices = [o['price'] for o in sorted_offers if not o['is_ours']]
             if len(prices) >= top_position:
-                target_price = prices[top_position - 1] - 1
+                target_price = prices[top_position - 1] - price_step
             else:
-                target_price = prices[-1] - 1 if prices else current_price
+                target_price = prices[-1] - price_step if prices else current_price
         else:  # standard
             target_price = min_competitor_price - price_step
 
         # Apply min/max constraints
-        if target_price < min_price:
-            target_price = min_price
+        # Если min_price не задана (0), используем цену на шаг ниже конкурента но не меньше 1
+        effective_min_price = min_price if min_price > 0 else 1
+        if target_price < effective_min_price:
+            target_price = effective_min_price
         if max_price and target_price > max_price:
             target_price = max_price
 
