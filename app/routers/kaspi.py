@@ -264,6 +264,11 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
 
             # Upsert products to database
             for product_data in products:
+                # Convert availabilities dict to JSON string for PostgreSQL
+                availabilities = product_data.get('availabilities')
+                if isinstance(availabilities, dict):
+                    availabilities = json.dumps(availabilities)
+
                 await conn.execute(
                     """
                     INSERT INTO products (
@@ -284,7 +289,7 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                     product_data.get('external_kaspi_id'),
                     product_data['name'],
                     product_data['price'],
-                    product_data.get('availabilities')
+                    availabilities
                 )
 
             # Update store products count and last sync
