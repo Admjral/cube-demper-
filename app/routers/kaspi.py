@@ -238,13 +238,26 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
             from ..core.security import decrypt_session
             # Extract encrypted string from JSON object
             guid_data = store['guid']
+            logger.info(f"guid_data type: {type(guid_data)}, value: {guid_data}")
+
+            # PostgreSQL may return JSON as string, parse it first
+            if isinstance(guid_data, str):
+                try:
+                    guid_data = json.loads(guid_data)
+                    logger.info(f"Parsed JSON string to dict: {type(guid_data)}")
+                except json.JSONDecodeError:
+                    logger.warning(f"guid_data is not JSON, treating as plain encrypted string")
+
             if isinstance(guid_data, dict):
                 encrypted_guid = guid_data.get('encrypted')
+                logger.info(f"Extracted encrypted_guid from dict: {encrypted_guid[:50]}..." if encrypted_guid else "None")
             else:
                 # Fallback for old format (plain string)
                 encrypted_guid = guid_data
+                logger.info(f"Using plain encrypted_guid: {encrypted_guid[:50]}..." if encrypted_guid else "None")
 
             session = decrypt_session(encrypted_guid)
+            logger.info(f"Decrypted session type: {type(session)}, keys: {session.keys() if isinstance(session, dict) else 'NOT A DICT'}")
 
             # Fetch products from Kaspi API
             products = await get_products(merchant_id, session)
