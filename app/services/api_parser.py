@@ -615,6 +615,292 @@ async def fetch_preorders(
 
 
 # ============================================================================
+# Orders Fetching
+# ============================================================================
+
+async def fetch_orders(
+    merchant_id: str,
+    session: dict,
+    status: str = "ARCHIVE",
+    days_back: int = 30
+) -> List[dict]:
+    """
+    Fetch orders from Kaspi merchant API.
+
+    Args:
+        merchant_id: Merchant UID
+        session: Session data with cookies and GUID
+        status: Order status filter (ARCHIVE, NEW, ACCEPTED_BY_MERCHANT, etc.)
+        days_back: How many days back to fetch orders
+
+    Returns:
+        List of order dictionaries
+
+    Raises:
+        Exception: If API call fails
+    """
+    logger.info(f"Fetching orders for merchant {merchant_id}, status={status}, days_back={days_back}")
+
+    rate_limiter = get_global_rate_limiter()
+    await rate_limiter.acquire()
+
+    # Get cookies and GUID from session
+    cookies = _get_cookies_from_session(session)
+    guid = session.get('guid', '')
+
+    # Calculate date range
+    from datetime import timedelta
+    end_date = datetime.utcnow()
+    start_date = end_date - timedelta(days=days_back)
+
+    # Format dates for API
+    start_ts = int(start_date.timestamp() * 1000)
+    end_ts = int(end_date.timestamp() * 1000)
+
+    # Kaspi orders API endpoint
+    url = "https://kaspi.kz/shop/api/v2/orders"
+
+    headers = {
+        "accept": "application/json, text/plain, */*",
+        "accept-encoding": "gzip, deflate, br",
+        "accept-language": "ru-RU,ru;q=0.9",
+        "content-type": "application/json",
+        "user-agent": random.choice(USER_AGENTS),
+        "x-ks-city": "750000000",
+        "origin": "https://kaspi.kz",
+        "referer": "https://kaspi.kz/mc/",
+        "sec-fetch-dest": "empty",
+        "sec-fetch-mode": "cors",
+        "sec-fetch-site": "same-origin",
+    }
+
+    # Build cookie string
+    cookie_str = "; ".join([f"{k}={v}" for k, v in cookies.items()])
+    if cookie_str:
+        headers["cookie"] = cookie_str
+
+    params = {
+        "filter": status,
+        "page[number]": 0,
+        "page[size]": 100,
+        "filter[orders][state]": status,
+        "filter[orders][creationDate][$ge]": start_ts,
+        "filter[orders][creationDate][$le]": end_ts,
+    }
+
+    all_orders = []
+    page = 0
+    max_pages = 50  # Safety limit
+
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            while page < max_pages:
+                params["page[number]"] = page
+
+                response = await client.get(
+                    url,
+                    params=params,
+                    headers=headers
+                )
+
+                if response.status_code == 401:
+                    logger.warning(f"Unauthorized when fetching orders for merchant {merchant_id}")
+                    raise KaspiAuthError("Session expired")
+
+                if response.status_code == 429:
+                    logger.warning("Rate limited, waiting...")
+                    await asyncio.sleep(2)
+                    continue
+
+                response.raise_for_status()
+                data = response.json()
+
+                orders = data.get("data", [])
+                if not orders:
+                    break
+
+                all_orders.extend(orders)
+                logger.debug(f"Fetched page {page}: {len(orders)} orders")
+
+                # Check if there are more pages
+                meta = data.get("meta", {})
+                total_pages = meta.get("pageCount", 1)
+                if page >= total_pages - 1:
+                    break
+
+                page += 1
+                await asyncio.sleep(0.3)  # Rate limiting
+
+    except httpx.HTTPError as e:
+        logger.error(f"Error fetching orders: {e}")
+        raise
+
+    logger.info(f"Fetched {len(all_orders)} orders for merchant {merchant_id}")
+    return all_orders
+
+
+async def parse_order_details(order_data: dict) -> dict:
+    """
+    Parse order data from Kaspi API response.
+
+    Args:
+        order_data: Raw order data from API
+
+    Returns:
+        Parsed order dictionary
+    """
+    attributes = order_data.get("attributes", {})
+
+    # Parse order items/entries
+    entries = []
+    for entry in attributes.get("entries", []):
+        entries.append({
+            "kaspi_product_id": entry.get("product", {}).get("code", ""),
+            "name": entry.get("product", {}).get("name", ""),
+            "sku": entry.get("product", {}).get("sku", ""),
+            "quantity": entry.get("quantity", 1),
+            "price": int(entry.get("basePrice", 0)),  # Price in tenge
+        })
+
+    # Parse customer info
+    customer = attributes.get("customer", {})
+
+    return {
+        "kaspi_order_id": order_data.get("id", ""),
+        "kaspi_order_code": attributes.get("code", ""),
+        "status": attributes.get("state", ""),
+        "total_price": int(attributes.get("totalPrice", 0)),
+        "delivery_cost": int(attributes.get("deliveryCost", 0)),
+        "customer_name": f"{customer.get('firstName', '')} {customer.get('lastName', '')}".strip(),
+        "customer_phone": customer.get("cellPhone", ""),
+        "delivery_address": attributes.get("deliveryAddress", {}).get("formattedAddress", ""),
+        "delivery_mode": attributes.get("deliveryMode", ""),
+        "payment_mode": attributes.get("paymentMode", ""),
+        "order_date": datetime.fromtimestamp(attributes.get("creationDate", 0) / 1000) if attributes.get("creationDate") else datetime.utcnow(),
+        "entries": entries,
+    }
+
+
+async def sync_orders_to_db(
+    store_id: str,
+    orders: List[dict]
+) -> dict:
+    """
+    Sync orders to database.
+
+    Args:
+        store_id: Store UUID
+        orders: List of parsed order dictionaries
+
+    Returns:
+        Sync result summary
+    """
+    import uuid as uuid_module
+    logger.info(f"Syncing {len(orders)} orders to database for store {store_id}")
+
+    pool = await get_db_pool()
+    inserted = 0
+    updated = 0
+    errors = 0
+
+    try:
+        async with pool.acquire() as conn:
+            for order in orders:
+                try:
+                    # Parse order details
+                    parsed = await parse_order_details(order)
+
+                    # Upsert order
+                    result = await conn.fetchrow(
+                        """
+                        INSERT INTO orders (
+                            store_id, kaspi_order_id, kaspi_order_code, status,
+                            total_price, delivery_cost, customer_name, customer_phone,
+                            delivery_address, delivery_mode, payment_mode, order_date
+                        )
+                        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+                        ON CONFLICT (store_id, kaspi_order_id)
+                        DO UPDATE SET
+                            status = $4,
+                            total_price = $5,
+                            updated_at = NOW()
+                        RETURNING id, (xmax = 0) as inserted
+                        """,
+                        uuid_module.UUID(store_id),
+                        parsed["kaspi_order_id"],
+                        parsed["kaspi_order_code"],
+                        parsed["status"],
+                        parsed["total_price"],
+                        parsed["delivery_cost"],
+                        parsed["customer_name"],
+                        parsed["customer_phone"],
+                        parsed["delivery_address"],
+                        parsed["delivery_mode"],
+                        parsed["payment_mode"],
+                        parsed["order_date"],
+                    )
+
+                    order_id = result["id"]
+                    if result["inserted"]:
+                        inserted += 1
+                    else:
+                        updated += 1
+
+                    # Upsert order items (only for new orders)
+                    if result["inserted"]:
+                        for entry in parsed["entries"]:
+                            # Try to find matching product
+                            product = await conn.fetchrow(
+                                """
+                                SELECT id FROM products
+                                WHERE store_id = $1 AND (kaspi_product_id = $2 OR kaspi_sku = $3)
+                                LIMIT 1
+                                """,
+                                uuid_module.UUID(store_id),
+                                entry["kaspi_product_id"],
+                                entry["sku"]
+                            )
+
+                            await conn.execute(
+                                """
+                                INSERT INTO order_items (
+                                    order_id, product_id, kaspi_product_id,
+                                    name, sku, quantity, price
+                                )
+                                VALUES ($1, $2, $3, $4, $5, $6, $7)
+                                """,
+                                order_id,
+                                product["id"] if product else None,
+                                entry["kaspi_product_id"],
+                                entry["name"],
+                                entry["sku"],
+                                entry["quantity"],
+                                entry["price"],
+                            )
+
+                except Exception as e:
+                    logger.error(f"Error syncing order: {e}")
+                    errors += 1
+
+            # Update last_orders_sync
+            await conn.execute(
+                """
+                UPDATE kaspi_stores
+                SET last_orders_sync = NOW()
+                WHERE id = $1
+                """,
+                uuid_module.UUID(store_id)
+            )
+
+    except Exception as e:
+        logger.error(f"Error in sync_orders_to_db: {e}")
+        raise
+
+    logger.info(f"Orders sync complete: {inserted} inserted, {updated} updated, {errors} errors")
+    return {"inserted": inserted, "updated": updated, "errors": errors}
+
+
+# ============================================================================
 # Additional Helper Functions
 # ============================================================================
 

@@ -1243,7 +1243,7 @@ async def get_store_analytics(
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
     period: str = '7d'
 ):
-    """Get sales analytics (placeholder - orders not implemented yet)"""
+    """Get sales analytics from orders data"""
     # Validate period
     if period not in ['7d', '30d', '90d']:
         raise HTTPException(
@@ -1264,17 +1264,52 @@ async def get_store_analytics(
                 detail="Store not found"
             )
 
-        # Generate empty daily stats for the period
         days = {'7d': 7, '30d': 30, '90d': 90}[period]
+        start_date = datetime.utcnow() - timedelta(days=days)
+
+        # Get daily stats from orders table
+        daily_data = await conn.fetch(
+            """
+            SELECT
+                DATE(order_date) as date,
+                COUNT(*) as orders,
+                COALESCE(SUM(total_price), 0) as revenue,
+                COALESCE(SUM(
+                    (SELECT COALESCE(SUM(quantity), 0) FROM order_items WHERE order_id = orders.id)
+                ), 0) as items
+            FROM orders
+            WHERE store_id = $1 AND order_date >= $2
+            GROUP BY DATE(order_date)
+            ORDER BY date ASC
+            """,
+            uuid.UUID(store_id),
+            start_date
+        )
+
+        # Create a map of date -> stats
+        stats_map = {
+            row['date'].strftime('%Y-%m-%d'): {
+                'date': row['date'].strftime('%Y-%m-%d'),
+                'orders': row['orders'],
+                'revenue': row['revenue'],
+                'items': row['items']
+            }
+            for row in daily_data
+        }
+
+        # Fill in missing days with zeros
         daily_stats = []
         for i in range(days):
             date = (datetime.utcnow() - timedelta(days=days-i-1)).strftime('%Y-%m-%d')
-            daily_stats.append({
-                'date': date,
-                'orders': 0,
-                'revenue': 0,
-                'items': 0
-            })
+            if date in stats_map:
+                daily_stats.append(stats_map[date])
+            else:
+                daily_stats.append({
+                    'date': date,
+                    'orders': 0,
+                    'revenue': 0,
+                    'items': 0
+                })
 
         return SalesAnalytics(
             store_id=store_id,
@@ -1290,7 +1325,7 @@ async def get_top_products(
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
     limit: int = 10
 ):
-    """Get top products by price changes (placeholder for sales)"""
+    """Get top products by sales from orders"""
     async with pool.acquire() as conn:
         # Verify ownership
         store = await conn.fetchrow(
@@ -1304,31 +1339,53 @@ async def get_top_products(
                 detail="Store not found"
             )
 
-        # Get products with most price updates (proxy for popularity)
+        # Get top products by sales (from order_items)
         products = await conn.fetch(
             """
             SELECT
-                p.id, p.kaspi_sku, p.name, p.price as current_price,
-                COUNT(ph.id) as price_changes
-            FROM products p
-            LEFT JOIN price_history ph ON ph.product_id = p.id
-            WHERE p.store_id = $1
-            GROUP BY p.id, p.kaspi_sku, p.name, p.price
-            ORDER BY price_changes DESC
+                COALESCE(p.id, oi.product_id) as id,
+                COALESCE(p.kaspi_sku, oi.sku) as kaspi_sku,
+                COALESCE(p.name, oi.name) as name,
+                COALESCE(p.price, 0) as current_price,
+                SUM(oi.quantity) as sales_count,
+                SUM(oi.quantity * oi.price) as revenue
+            FROM order_items oi
+            JOIN orders o ON o.id = oi.order_id
+            LEFT JOIN products p ON p.id = oi.product_id
+            WHERE o.store_id = $1
+            GROUP BY COALESCE(p.id, oi.product_id), COALESCE(p.kaspi_sku, oi.sku),
+                     COALESCE(p.name, oi.name), COALESCE(p.price, 0)
+            ORDER BY sales_count DESC
             LIMIT $2
             """,
             uuid.UUID(store_id),
             limit
         )
 
+        # If no order data, fallback to products list
+        if not products:
+            products = await conn.fetch(
+                """
+                SELECT
+                    p.id, p.kaspi_sku, p.name, p.price as current_price,
+                    0 as sales_count, 0 as revenue
+                FROM products p
+                WHERE p.store_id = $1
+                ORDER BY p.name
+                LIMIT $2
+                """,
+                uuid.UUID(store_id),
+                limit
+            )
+
         return [
             TopProduct(
-                id=str(p['id']),
+                id=str(p['id']) if p['id'] else '',
                 kaspi_sku=p['kaspi_sku'] or '',
                 name=p['name'],
                 current_price=p['current_price'],
-                sales_count=0,  # Placeholder
-                revenue=0       # Placeholder
+                sales_count=p['sales_count'] or 0,
+                revenue=p['revenue'] or 0
             )
             for p in products
         ]
@@ -1398,6 +1455,83 @@ async def sync_store_products_by_id(
         "message": "Product sync started in background",
         "store_id": store_id
     }
+
+
+@router.post("/stores/{store_id}/sync-orders", status_code=status.HTTP_202_ACCEPTED)
+async def sync_store_orders(
+    store_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    days_back: int = 30
+):
+    """Sync orders for a specific store from Kaspi API"""
+    async with pool.acquire() as conn:
+        # Verify store ownership and get merchant_id
+        store = await conn.fetchrow(
+            "SELECT id, merchant_id, guid FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id),
+            current_user['id']
+        )
+
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+
+        if not store['guid']:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Store not authenticated"
+            )
+
+    # Add background task to sync orders
+    background_tasks.add_task(
+        _sync_store_orders_task,
+        store_id=store_id,
+        merchant_id=store['merchant_id'],
+        days_back=days_back
+    )
+
+    return {
+        "status": "accepted",
+        "message": "Orders sync started in background",
+        "store_id": store_id
+    }
+
+
+async def _sync_store_orders_task(store_id: str, merchant_id: str, days_back: int = 30):
+    """Background task to sync store orders from Kaspi API"""
+    from ..services.api_parser import fetch_orders, sync_orders_to_db
+    from ..services.kaspi_auth_service import get_active_session_with_refresh
+
+    try:
+        logger.info(f"Starting orders sync for store {store_id}, merchant {merchant_id}")
+
+        # Get session with auto-refresh
+        session = await get_active_session_with_refresh(merchant_id)
+        if not session:
+            logger.error(f"No valid session for merchant {merchant_id}")
+            return
+
+        # Fetch completed orders from Kaspi
+        orders = await fetch_orders(
+            merchant_id=merchant_id,
+            session=session,
+            status="ARCHIVE",  # Completed orders
+            days_back=days_back
+        )
+
+        if orders:
+            # Sync to database
+            result = await sync_orders_to_db(store_id, orders)
+            logger.info(f"Orders sync complete for store {store_id}: {result}")
+        else:
+            logger.info(f"No orders found for store {store_id}")
+
+    except Exception as e:
+        logger.error(f"Error syncing orders for store {store_id}: {e}")
 
 
 @router.get("/products/{product_id}/price-history")
