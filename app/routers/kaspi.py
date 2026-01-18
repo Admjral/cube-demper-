@@ -6,6 +6,7 @@ import asyncpg
 import uuid
 import logging
 import json
+from datetime import datetime, timedelta
 
 from ..schemas.kaspi import (
     KaspiStoreResponse,
@@ -15,6 +16,10 @@ from ..schemas.kaspi import (
     ProductUpdateRequest,
     BulkPriceUpdateRequest,
     StoreCreateRequest,
+    DempingSettings,
+    StoreStats,
+    SalesAnalytics,
+    TopProduct,
 )
 from ..schemas.products import ProductResponse, ProductListResponse, ProductFilters, ProductAnalytics
 from ..core.database import get_db_pool
@@ -216,45 +221,6 @@ async def verify_sms(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e)
         )
-
-
-@router.post("/stores/sync", status_code=status.HTTP_202_ACCEPTED)
-async def sync_store_products(
-    sync_request: StoreSyncRequest,
-    background_tasks: BackgroundTasks,
-    current_user: Annotated[dict, Depends(get_current_user)],
-    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
-):
-    """Sync products from Kaspi API to database (background task)"""
-    async with pool.acquire() as conn:
-        # Verify store ownership
-        store = await conn.fetchrow(
-            """
-            SELECT id, merchant_id, guid FROM kaspi_stores
-            WHERE id = $1 AND user_id = $2 AND is_active = true
-            """,
-            uuid.UUID(sync_request.store_id),
-            current_user['id']
-        )
-
-        if not store:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail="Store not found or inactive"
-            )
-
-    # Add background task to sync products
-    background_tasks.add_task(
-        _sync_store_products_task,
-        store_id=str(store['id']),
-        merchant_id=store['merchant_id']
-    )
-
-    return {
-        "status": "started",
-        "store_id": str(store['id']),
-        "message": "Product synchronization started"
-    }
 
 
 async def _sync_store_products_task(store_id: str, merchant_id: str):
@@ -592,6 +558,230 @@ async def get_analytics(
 
 
 # ============================================================================
+# Store-Specific Endpoints (REST-style)
+# ============================================================================
+
+@router.get("/stores/{store_id}/products", response_model=ProductListResponse)
+async def list_store_products(
+    store_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    filters: ProductFilters = Depends()
+):
+    """List products for specific store (REST-style endpoint)"""
+    # Verify store ownership
+    async with pool.acquire() as conn:
+        store = await conn.fetchrow(
+            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id),
+            current_user['id']
+        )
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+
+    # Set store_id filter and reuse existing list_products logic
+    filters.store_id = store_id
+    return await list_products(current_user, pool, filters)
+
+
+@router.get("/stores/{store_id}/demping", response_model=DempingSettings)
+async def get_store_demping_settings(
+    store_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get demping settings for store"""
+    async with pool.acquire() as conn:
+        # Verify ownership
+        store = await conn.fetchrow(
+            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id),
+            current_user['id']
+        )
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+
+        # Get settings from demping_settings table (if exists)
+        # For now, return default settings since table might not exist yet
+        # TODO: Query actual demping_settings table after migration
+        return DempingSettings(min_profit=0, bot_active=True)
+
+
+@router.patch("/stores/{store_id}/demping", response_model=DempingSettings)
+async def update_store_demping_settings(
+    store_id: str,
+    settings_update: DempingSettings,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Update demping settings for store"""
+    async with pool.acquire() as conn:
+        # Verify ownership
+        store = await conn.fetchrow(
+            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id),
+            current_user['id']
+        )
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+
+        # TODO: Upsert to demping_settings table after migration
+        # For now, just return the settings
+        logger.info(f"Demping settings update requested for store {store_id}: {settings_update}")
+        return settings_update
+
+
+@router.get("/stores/{store_id}/stats", response_model=StoreStats)
+async def get_store_stats(
+    store_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get store statistics"""
+    async with pool.acquire() as conn:
+        # Verify ownership and get store info
+        store = await conn.fetchrow(
+            "SELECT * FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id),
+            current_user['id']
+        )
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+
+        # Get products stats
+        stats = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) as total_products,
+                COUNT(*) FILTER (WHERE price > 0) as active_products,
+                COUNT(*) FILTER (WHERE bot_active = true) as demping_enabled
+            FROM products
+            WHERE store_id = $1
+            """,
+            uuid.UUID(store_id)
+        )
+
+        return StoreStats(
+            store_id=store_id,
+            store_name=store['name'],
+            products_count=stats['total_products'] or 0,
+            active_products_count=stats['active_products'] or 0,
+            demping_enabled_count=stats['demping_enabled'] or 0,
+            last_sync=store['last_sync']
+        )
+
+
+@router.get("/stores/{store_id}/analytics", response_model=SalesAnalytics)
+async def get_store_analytics(
+    store_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    period: str = '7d'
+):
+    """Get sales analytics (placeholder - orders not implemented yet)"""
+    # Validate period
+    if period not in ['7d', '30d', '90d']:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Period must be one of: 7d, 30d, 90d"
+        )
+
+    async with pool.acquire() as conn:
+        # Verify ownership
+        store = await conn.fetchrow(
+            "SELECT * FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id),
+            current_user['id']
+        )
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+
+        # Generate empty daily stats for the period
+        days = {'7d': 7, '30d': 30, '90d': 90}[period]
+        daily_stats = []
+        for i in range(days):
+            date = (datetime.utcnow() - timedelta(days=days-i-1)).strftime('%Y-%m-%d')
+            daily_stats.append({
+                'date': date,
+                'orders': 0,
+                'revenue': 0,
+                'items': 0
+            })
+
+        return SalesAnalytics(
+            store_id=store_id,
+            period=period,
+            daily_stats=daily_stats
+        )
+
+
+@router.get("/stores/{store_id}/top-products", response_model=List[TopProduct])
+async def get_top_products(
+    store_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    limit: int = 10
+):
+    """Get top products by price changes (placeholder for sales)"""
+    async with pool.acquire() as conn:
+        # Verify ownership
+        store = await conn.fetchrow(
+            "SELECT * FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id),
+            current_user['id']
+        )
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found"
+            )
+
+        # Get products with most price updates (proxy for popularity)
+        products = await conn.fetch(
+            """
+            SELECT
+                p.id, p.kaspi_sku, p.name, p.price as current_price,
+                COUNT(ph.id) as price_changes
+            FROM products p
+            LEFT JOIN price_history ph ON ph.product_id = p.id
+            WHERE p.store_id = $1
+            GROUP BY p.id, p.kaspi_sku, p.name, p.price
+            ORDER BY price_changes DESC
+            LIMIT $2
+            """,
+            uuid.UUID(store_id),
+            limit
+        )
+
+        return [
+            TopProduct(
+                id=str(p['id']),
+                kaspi_sku=p['kaspi_sku'] or '',
+                name=p['name'],
+                current_price=p['current_price'],
+                sales_count=0,  # Placeholder
+                revenue=0       # Placeholder
+            )
+            for p in products
+        ]
+
+
+# ============================================================================
 # Additional Frontend Compatibility Endpoints
 # ============================================================================
 
@@ -622,17 +812,17 @@ async def delete_store(
 
 
 @router.post("/stores/{store_id}/sync", status_code=status.HTTP_202_ACCEPTED)
-async def sync_store_products(
+async def sync_store_products_by_id(
     store_id: str,
     background_tasks: BackgroundTasks,
     current_user: Annotated[dict, Depends(get_current_user)],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
-    """Sync products for a specific store (path param version for frontend compatibility)"""
-    # Verify store ownership
+    """Sync products for a specific store (REST-style endpoint)"""
     async with pool.acquire() as conn:
+        # Verify store ownership and get merchant_id
         store = await conn.fetchrow(
-            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            "SELECT id, merchant_id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
             uuid.UUID(store_id),
             current_user['id']
         )
@@ -643,16 +833,12 @@ async def sync_store_products(
                 detail="Store not found"
             )
 
-    # Reuse the existing sync_products background function
-    async def sync_task():
-        try:
-            logger.info(f"Starting product sync for store {store_id}")
-            # TODO: Implement actual product sync from Kaspi API
-            logger.info(f"Completed product sync for store {store_id}")
-        except Exception as e:
-            logger.error(f"Error syncing store {store_id}: {e}")
-
-    background_tasks.add_task(sync_task)
+    # Add background task to sync products using existing function
+    background_tasks.add_task(
+        _sync_store_products_task,
+        store_id=store_id,
+        merchant_id=store['merchant_id']
+    )
 
     return {
         "status": "accepted",
