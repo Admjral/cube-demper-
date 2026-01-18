@@ -98,8 +98,8 @@ async def authenticate_store(
             merchant_id=auth_data.merchant_id
         )
 
-        # Encrypt session data
-        encrypted_guid = encrypt_session(session_data)
+        # Extract already-encrypted GUID from session_data
+        encrypted_guid = session_data.get('guid')  # Already encrypted by authenticate_kaspi
         merchant_id = session_data.get('merchant_uid')
         shop_name = session_data.get('shop_name', f"Store {merchant_id}")
 
@@ -192,8 +192,8 @@ async def verify_sms(
                 partial_session=partial_session
             )
 
-            # Update store with complete session
-            encrypted_guid = encrypt_session(complete_session)
+            # Extract already-encrypted GUID from complete_session
+            encrypted_guid = complete_session.get('guid')  # Already encrypted by verify_sms_code
             store_id = await conn.fetchval(
                 """
                 UPDATE kaspi_stores
@@ -201,7 +201,7 @@ async def verify_sms(
                 WHERE merchant_id = $2 AND user_id = $3
                 RETURNING id
                 """,
-                encrypted_guid,
+                json.dumps({'encrypted': encrypted_guid}),
                 sms_data.merchant_id,
                 current_user['id']
             )
