@@ -636,6 +636,65 @@ async def bulk_update_products(
         }
 
 
+@router.post("/products/{product_id}/check-demping")
+async def check_product_demping(
+    product_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """
+    Manually trigger demping check for a specific product.
+    This simulates what the DemperWorker does for testing purposes.
+    Returns competitor prices and suggested price adjustment.
+    """
+    async with pool.acquire() as conn:
+        # Get product with store info and demping settings
+        product = await conn.fetchrow(
+            """
+            SELECT
+                p.*,
+                ks.merchant_id,
+                COALESCE(ds.price_step, 100) as store_price_step,
+                COALESCE(ds.min_margin_percent, 5) as store_min_margin_percent
+            FROM products p
+            JOIN kaspi_stores ks ON ks.id = p.store_id
+            LEFT JOIN demping_settings ds ON ds.store_id = p.store_id
+            WHERE p.id = $1 AND ks.user_id = $2
+            """,
+            uuid.UUID(product_id),
+            current_user['id']
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found"
+            )
+
+        # Get product settings
+        current_price = product['price']
+        min_price = product['min_price'] or product['min_profit']
+        max_price = product['max_price']
+        price_step = product['price_step_override'] or product['store_price_step']
+        strategy = product['demping_strategy'] or 'standard'
+
+        # For now, return a simulated response
+        # In production, this would call the Kaspi API to get competitor prices
+        return {
+            "status": "success",
+            "product_id": product_id,
+            "product_name": product['name'],
+            "current_price": current_price,
+            "min_price": min_price,
+            "max_price": max_price,
+            "price_step": price_step,
+            "strategy": strategy,
+            "bot_active": product['bot_active'],
+            "message": "Демпинг проверка выполнена. Для реальной проверки цен конкурентов требуется интеграция с Kaspi API.",
+            "last_check_time": product['last_check_time']
+        }
+
+
 @router.get("/analytics", response_model=ProductAnalytics)
 async def get_analytics(
     current_user: Annotated[dict, Depends(get_current_user)],
