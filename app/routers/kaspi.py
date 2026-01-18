@@ -38,6 +38,7 @@ from ..services.api_parser import (
     get_products,
     sync_product,
     batch_sync_products,
+    parse_product_by_sku,
 )
 from ..core.security import encrypt_session
 
