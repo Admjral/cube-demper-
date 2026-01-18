@@ -14,6 +14,8 @@ class UserAdminResponse(BaseModel):
     created_at: datetime
     updated_at: datetime
     subscription_plan: Optional[str]
+    subscription_status: Optional[str]
+    stores_count: int
     products_count: int
 
     class Config:

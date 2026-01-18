@@ -17,6 +17,7 @@ from ..schemas.kaspi import (
     BulkPriceUpdateRequest,
     StoreCreateRequest,
     DempingSettings,
+    DempingSettingsUpdate,
     StoreStats,
     SalesAnalytics,
     TopProduct,
@@ -625,16 +626,44 @@ async def get_store_demping_settings(
                 detail="Store not found"
             )
 
-        # Get settings from demping_settings table (if exists)
-        # For now, return default settings since table might not exist yet
-        # TODO: Query actual demping_settings table after migration
-        return DempingSettings(min_profit=0, bot_active=True)
+        # Get or create settings
+        settings = await conn.fetchrow(
+            "SELECT * FROM demping_settings WHERE store_id = $1",
+            uuid.UUID(store_id)
+        )
+
+        if not settings:
+            # Create default settings
+            settings = await conn.fetchrow(
+                """
+                INSERT INTO demping_settings (store_id)
+                VALUES ($1)
+                RETURNING *
+                """,
+                uuid.UUID(store_id)
+            )
+
+        return DempingSettings(
+            id=str(settings['id']),
+            store_id=str(settings['store_id']),
+            min_profit=settings['min_profit'],
+            bot_active=settings['bot_active'],
+            price_step=settings['price_step'],
+            min_margin_percent=settings['min_margin_percent'],
+            check_interval_minutes=settings['check_interval_minutes'],
+            work_hours_start=settings['work_hours_start'],
+            work_hours_end=settings['work_hours_end'],
+            is_enabled=settings['is_enabled'],
+            last_check=settings['last_check'],
+            created_at=settings['created_at'],
+            updated_at=settings['updated_at']
+        )
 
 
 @router.patch("/stores/{store_id}/demping", response_model=DempingSettings)
 async def update_store_demping_settings(
     store_id: str,
-    settings_update: DempingSettings,
+    settings_update: DempingSettingsUpdate,
     current_user: Annotated[dict, Depends(get_current_user)],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
@@ -652,10 +681,63 @@ async def update_store_demping_settings(
                 detail="Store not found"
             )
 
-        # TODO: Upsert to demping_settings table after migration
-        # For now, just return the settings
-        logger.info(f"Demping settings update requested for store {store_id}: {settings_update}")
-        return settings_update
+        # Build UPDATE query dynamically for only the fields provided
+        update_dict = settings_update.dict(exclude_unset=True)
+
+        if not update_dict:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update"
+            )
+
+        # Build SET clause
+        set_clauses = []
+        values = [uuid.UUID(store_id)]
+        param_num = 2
+
+        for field, value in update_dict.items():
+            set_clauses.append(f"{field} = ${param_num}")
+            values.append(value)
+            param_num += 1
+
+        # Try to update existing settings
+        query = f"""
+            UPDATE demping_settings
+            SET {', '.join(set_clauses)}
+            WHERE store_id = $1
+            RETURNING *
+        """
+
+        settings = await conn.fetchrow(query, *values)
+
+        # If no settings exist, create with provided values
+        if not settings:
+            columns = ['store_id'] + list(update_dict.keys())
+            placeholders = ['$1'] + [f'${i+2}' for i in range(len(update_dict))]
+
+            insert_query = f"""
+                INSERT INTO demping_settings ({', '.join(columns)})
+                VALUES ({', '.join(placeholders)})
+                RETURNING *
+            """
+
+            settings = await conn.fetchrow(insert_query, uuid.UUID(store_id), *update_dict.values())
+
+        return DempingSettings(
+            id=str(settings['id']),
+            store_id=str(settings['store_id']),
+            min_profit=settings['min_profit'],
+            bot_active=settings['bot_active'],
+            price_step=settings['price_step'],
+            min_margin_percent=settings['min_margin_percent'],
+            check_interval_minutes=settings['check_interval_minutes'],
+            work_hours_start=settings['work_hours_start'],
+            work_hours_end=settings['work_hours_end'],
+            is_enabled=settings['is_enabled'],
+            last_check=settings['last_check'],
+            created_at=settings['created_at'],
+            updated_at=settings['updated_at']
+        )
 
 
 @router.get("/stores/{store_id}/stats", response_model=StoreStats)

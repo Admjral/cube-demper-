@@ -56,8 +56,34 @@ class BulkPriceUpdateRequest(BaseModel):
 
 class DempingSettings(BaseModel):
     """Schema for demping settings"""
+    id: str
+    store_id: str
     min_profit: int = Field(..., description="Minimum profit in tiyns", ge=0)
     bot_active: bool = True
+    price_step: int = Field(100, description="Price adjustment step in tiyns", ge=0)
+    min_margin_percent: int = Field(5, ge=0, le=100)
+    check_interval_minutes: int = Field(15, ge=1, le=1440)
+    work_hours_start: str = Field("09:00", pattern=r"^\d{2}:\d{2}$")
+    work_hours_end: str = Field("21:00", pattern=r"^\d{2}:\d{2}$")
+    is_enabled: bool = True
+    last_check: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class DempingSettingsUpdate(BaseModel):
+    """Schema for updating demping settings"""
+    min_profit: Optional[int] = Field(None, ge=0)
+    bot_active: Optional[bool] = None
+    price_step: Optional[int] = Field(None, ge=0)
+    min_margin_percent: Optional[int] = Field(None, ge=0, le=100)
+    check_interval_minutes: Optional[int] = Field(None, ge=1, le=1440)
+    work_hours_start: Optional[str] = Field(None, pattern=r"^\d{2}:\d{2}$")
+    work_hours_end: Optional[str] = Field(None, pattern=r"^\d{2}:\d{2}$")
+    is_enabled: Optional[bool] = None
 
 
 class StoreCreateRequest(BaseModel):

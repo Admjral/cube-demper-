@@ -31,12 +31,18 @@ async def list_users(
         # Get total count
         total = await conn.fetchval("SELECT COUNT(*) FROM users")
 
-        # Get users with subscription info and product counts
+        # Get users with subscription info, store counts, and product counts
         users = await conn.fetch(
             """
             SELECT
                 u.id, u.email, u.full_name, u.role, u.created_at, u.updated_at,
                 s.plan as subscription_plan,
+                s.status as subscription_status,
+                (
+                    SELECT COUNT(DISTINCT k.id)
+                    FROM kaspi_stores k
+                    WHERE k.user_id = u.id
+                ) as stores_count,
                 (
                     SELECT COUNT(*)
                     FROM products p
@@ -44,7 +50,7 @@ async def list_users(
                     WHERE k.user_id = u.id
                 ) as products_count
             FROM users u
-            LEFT JOIN subscriptions s ON s.user_id = u.id AND s.status = 'active'
+            LEFT JOIN subscriptions s ON s.user_id = u.id
             ORDER BY u.created_at DESC
             LIMIT $1 OFFSET $2
             """,
@@ -61,6 +67,8 @@ async def list_users(
                 created_at=u['created_at'],
                 updated_at=u['updated_at'],
                 subscription_plan=u['subscription_plan'],
+                subscription_status=u['subscription_status'],
+                stores_count=u['stores_count'],
                 products_count=u['products_count']
             )
             for u in users
