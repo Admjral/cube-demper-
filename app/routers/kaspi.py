@@ -487,6 +487,11 @@ async def update_product(
             *params
         )
 
+        # Parse availabilities if it's a JSON string
+        availabilities = updated['availabilities']
+        if isinstance(availabilities, str):
+            availabilities = json.loads(availabilities)
+
         return ProductResponse(
             id=str(updated['id']),
             store_id=str(updated['store_id']),
@@ -498,7 +503,7 @@ async def update_product(
             min_profit=updated['min_profit'],
             bot_active=updated['bot_active'],
             last_check_time=updated['last_check_time'],
-            availabilities=updated['availabilities'],
+            availabilities=availabilities,
             created_at=updated['created_at'],
             updated_at=updated['updated_at']
         )
