@@ -76,10 +76,18 @@ def encrypt_session(session_data: dict) -> str:
 
 def decrypt_session(encrypted_data: str) -> dict:
     """Decrypt Kaspi session data"""
+    import logging
+    logger = logging.getLogger(__name__)
+
     try:
+        if not encrypted_data:
+            logger.warning("decrypt_session: empty encrypted_data")
+            return {}
         decrypted = cipher.decrypt(encrypted_data.encode())
         return json.loads(decrypted.decode())
-    except Exception:
+    except Exception as e:
+        logger.error(f"decrypt_session failed: {type(e).__name__}: {e}")
+        logger.debug(f"encrypted_data (first 50 chars): {encrypted_data[:50] if encrypted_data else 'None'}...")
         return {}
 
 
