@@ -8,8 +8,8 @@ import uuid
 class Product:
     """Product model - represents products in Kaspi stores
 
-    IMPORTANT: Prices are stored in TIYNS (1 KZT = 100 tiyns)
-    Example: 199.99 KZT = 19999 tiyns
+    Цены хранятся в ТЕНГЕ (целые числа).
+    Пример: 199 KZT = 199
     """
     id: uuid.UUID
     store_id: uuid.UUID
@@ -17,8 +17,8 @@ class Product:
     kaspi_sku: Optional[str]
     external_kaspi_id: Optional[str]
     name: str
-    price: int  # In tiyns (1/100 KZT)
-    min_profit: int  # In tiyns
+    price: int  # В тенге (KZT)
+    min_profit: int  # В тенге (KZT)
     bot_active: bool
     last_check_time: Optional[datetime]
     availabilities: Optional[dict]  # JSON with warehouse availabilities
@@ -63,11 +63,11 @@ class Product:
         }
 
     @property
-    def price_kzt(self) -> float:
-        """Get price in KZT (for display)"""
-        return self.price / 100.0
+    def price_kzt(self) -> int:
+        """Get price in KZT (цена уже в тенге)"""
+        return self.price
 
     @property
-    def min_profit_kzt(self) -> float:
-        """Get min profit in KZT (for display)"""
-        return self.min_profit / 100.0
+    def min_profit_kzt(self) -> int:
+        """Get min profit in KZT (цена уже в тенге)"""
+        return self.min_profit

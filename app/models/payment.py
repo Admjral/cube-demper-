@@ -6,10 +6,13 @@ import uuid
 
 @dataclass
 class Payment:
-    """Payment model - represents payment transactions"""
+    """Payment model - represents payment transactions
+
+    Суммы хранятся в ТЕНГЕ (целые числа).
+    """
     id: uuid.UUID
     user_id: uuid.UUID
-    amount: int  # In tiyns
+    amount: int  # В тенге (KZT)
     status: str  # 'pending', 'completed', 'failed', 'refunded'
     plan: Optional[str]  # Associated subscription plan
     tiptoppay_transaction_id: Optional[str]
@@ -44,6 +47,6 @@ class Payment:
         }
 
     @property
-    def amount_kzt(self) -> float:
-        """Get amount in KZT (for display)"""
-        return self.amount / 100.0
+    def amount_kzt(self) -> int:
+        """Get amount in KZT (сумма уже в тенге)"""
+        return self.amount
