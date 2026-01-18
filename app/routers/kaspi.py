@@ -18,6 +18,7 @@ from ..schemas.kaspi import (
     StoreCreateRequest,
     DempingSettings,
     DempingSettingsUpdate,
+    ProductDempingDetails,
     StoreStats,
     SalesAnalytics,
     TopProduct,
@@ -441,6 +442,32 @@ async def update_product(
             updates.append(f"bot_active = ${param_count}")
             params.append(update_data.bot_active)
 
+        # New product-level demping fields
+        if update_data.max_price is not None:
+            param_count += 1
+            updates.append(f"max_price = ${param_count}")
+            params.append(update_data.max_price)
+
+        if update_data.min_price is not None:
+            param_count += 1
+            updates.append(f"min_price = ${param_count}")
+            params.append(update_data.min_price)
+
+        if update_data.price_step_override is not None:
+            param_count += 1
+            updates.append(f"price_step_override = ${param_count}")
+            params.append(update_data.price_step_override)
+
+        if update_data.demping_strategy is not None:
+            param_count += 1
+            updates.append(f"demping_strategy = ${param_count}")
+            params.append(update_data.demping_strategy)
+
+        if update_data.strategy_params is not None:
+            param_count += 1
+            updates.append(f"strategy_params = ${param_count}")
+            params.append(json.dumps(update_data.strategy_params))
+
         if not updates:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -474,6 +501,70 @@ async def update_product(
             availabilities=updated['availabilities'],
             created_at=updated['created_at'],
             updated_at=updated['updated_at']
+        )
+
+
+@router.get("/products/{product_id}/demping-details", response_model=ProductDempingDetails)
+async def get_product_demping_details(
+    product_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get detailed demping information for a product"""
+    async with pool.acquire() as conn:
+        # JOIN products + demping_settings + price_history count
+        details = await conn.fetchrow(
+            """
+            SELECT
+                p.*,
+                COALESCE(ds.price_step, 100) as store_price_step,
+                COALESCE(ds.min_margin_percent, 5) as store_min_margin_percent,
+                COALESCE(ds.work_hours_start, '09:00') as store_work_hours_start,
+                COALESCE(ds.work_hours_end, '21:00') as store_work_hours_end,
+                (
+                    SELECT COUNT(*)
+                    FROM price_history ph
+                    WHERE ph.product_id = p.id
+                    AND ph.created_at > NOW() - INTERVAL '7 days'
+                ) as price_changes_count
+            FROM products p
+            JOIN kaspi_stores ks ON ks.id = p.store_id
+            LEFT JOIN demping_settings ds ON ds.store_id = p.store_id
+            WHERE p.id = $1 AND ks.user_id = $2
+            """,
+            uuid.UUID(product_id),
+            current_user['id']
+        )
+
+        if not details:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found"
+            )
+
+        # Parse strategy_params if it's a string
+        strategy_params = details['strategy_params']
+        if isinstance(strategy_params, str):
+            strategy_params = json.loads(strategy_params)
+
+        return ProductDempingDetails(
+            product_id=str(details['id']),
+            product_name=details['name'],
+            kaspi_sku=details['kaspi_sku'],
+            current_price=details['price'],
+            min_profit=details['min_profit'],
+            bot_active=details['bot_active'],
+            max_price=details['max_price'],
+            min_price=details['min_price'],
+            price_step_override=details['price_step_override'],
+            demping_strategy=details['demping_strategy'] or 'standard',
+            strategy_params=strategy_params,
+            store_price_step=details['store_price_step'],
+            store_min_margin_percent=details['store_min_margin_percent'],
+            store_work_hours_start=details['store_work_hours_start'],
+            store_work_hours_end=details['store_work_hours_end'],
+            last_check_time=details['last_check_time'],
+            price_changes_count=details['price_changes_count']
         )
 
 

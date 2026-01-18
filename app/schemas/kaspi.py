@@ -44,6 +44,12 @@ class ProductUpdateRequest(BaseModel):
     price: Optional[int] = Field(None, description="Price in tiyns (1 KZT = 100 tiyns)")
     min_profit: Optional[int] = Field(None, description="Minimum profit in tiyns")
     bot_active: Optional[bool] = None
+    # Product-level demping settings
+    max_price: Optional[int] = Field(None, description="Maximum price in tiyns")
+    min_price: Optional[int] = Field(None, description="Minimum price in tiyns")
+    price_step_override: Optional[int] = Field(None, description="Price step override in tiyns")
+    demping_strategy: Optional[str] = Field(None, pattern="^(standard|always_first|stay_top_n)$")
+    strategy_params: Optional[dict] = None
 
 
 class BulkPriceUpdateRequest(BaseModel):
@@ -84,6 +90,36 @@ class DempingSettingsUpdate(BaseModel):
     work_hours_start: Optional[str] = Field(None, pattern=r"^\d{2}:\d{2}$")
     work_hours_end: Optional[str] = Field(None, pattern=r"^\d{2}:\d{2}$")
     is_enabled: Optional[bool] = None
+
+
+class ProductDempingDetails(BaseModel):
+    """Detailed product demping information"""
+    product_id: str
+    product_name: str
+    kaspi_sku: Optional[str]
+    current_price: int
+    min_profit: int
+    bot_active: bool
+
+    # Product-level settings (null = use global)
+    max_price: Optional[int] = None
+    min_price: Optional[int] = None
+    price_step_override: Optional[int] = None
+    demping_strategy: str = "standard"
+    strategy_params: Optional[dict] = None
+
+    # Global store settings (for display)
+    store_price_step: int
+    store_min_margin_percent: int
+    store_work_hours_start: str
+    store_work_hours_end: str
+
+    # Statistics
+    last_check_time: Optional[datetime] = None
+    price_changes_count: int = 0
+
+    class Config:
+        from_attributes = True
 
 
 class StoreCreateRequest(BaseModel):
