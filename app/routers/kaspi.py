@@ -75,7 +75,8 @@ async def list_stores(
 async def authenticate_store(
     auth_data: KaspiAuthRequest,
     current_user: Annotated[dict, Depends(get_current_user)],
-    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    background_tasks: BackgroundTasks
 ):
     """
     Authenticate with Kaspi and create/update store.
@@ -113,6 +114,14 @@ async def authenticate_store(
                 json.dumps({'encrypted': encrypted_guid})
             )
 
+        # Auto-sync products after successful authentication
+        background_tasks.add_task(
+            _sync_store_products_task,
+            store_id=str(store['id']),
+            merchant_id=merchant_id
+        )
+        logger.info(f"Started automatic product sync for store {store['id']}")
+
         return {
             "status": "success",
             "store_id": str(store['id']),
@@ -138,7 +147,8 @@ async def authenticate_store(
 async def verify_sms(
     sms_data: KaspiAuthSMSRequest,
     current_user: Annotated[dict, Depends(get_current_user)],
-    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    background_tasks: BackgroundTasks
 ):
     """Complete Kaspi authentication with SMS code"""
     try:
@@ -161,7 +171,15 @@ async def verify_sms(
 
             # Verify SMS code
             from ..core.security import decrypt_session
-            partial_session = decrypt_session(store['guid'])
+            # Extract encrypted string from JSON object
+            guid_data = store['guid']
+            if isinstance(guid_data, dict):
+                encrypted_guid = guid_data.get('encrypted')
+            else:
+                # Fallback for old format (plain string)
+                encrypted_guid = guid_data
+
+            partial_session = decrypt_session(encrypted_guid)
 
             complete_session = await verify_sms_code(
                 merchant_id=sms_data.merchant_id,
@@ -171,16 +189,25 @@ async def verify_sms(
 
             # Update store with complete session
             encrypted_guid = encrypt_session(complete_session)
-            await conn.execute(
+            store_id = await conn.fetchval(
                 """
                 UPDATE kaspi_stores
                 SET guid = $1, is_active = true, updated_at = NOW()
                 WHERE merchant_id = $2 AND user_id = $3
+                RETURNING id
                 """,
                 encrypted_guid,
                 sms_data.merchant_id,
                 current_user['id']
             )
+
+        # Auto-sync products after successful SMS verification
+        background_tasks.add_task(
+            _sync_store_products_task,
+            store_id=str(store_id),
+            merchant_id=sms_data.merchant_id
+        )
+        logger.info(f"Started automatic product sync for store {store_id} after SMS verification")
 
         return {"status": "success", "merchant_id": sms_data.merchant_id}
 
@@ -243,7 +270,15 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
             )
 
             from ..core.security import decrypt_session
-            session = decrypt_session(store['guid'])
+            # Extract encrypted string from JSON object
+            guid_data = store['guid']
+            if isinstance(guid_data, dict):
+                encrypted_guid = guid_data.get('encrypted')
+            else:
+                # Fallback for old format (plain string)
+                encrypted_guid = guid_data
+
+            session = decrypt_session(encrypted_guid)
 
             # Fetch products from Kaspi API
             products = await get_products(merchant_id, session)
