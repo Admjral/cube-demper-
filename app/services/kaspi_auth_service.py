@@ -567,13 +567,24 @@ async def get_active_session_with_refresh(merchant_id: str, auto_refresh: bool =
     try:
         pool = await get_db_pool()
         async with pool.acquire() as conn:
-            row = await conn.fetchrow(
-                """
-                SELECT id, guid, name FROM kaspi_stores
-                WHERE merchant_id = $1 AND is_active = true
-                """,
-                merchant_id
-            )
+            # Try to get credentials from separate columns first
+            try:
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, guid, name, kaspi_email, kaspi_password FROM kaspi_stores
+                    WHERE merchant_id = $1 AND is_active = true
+                    """,
+                    merchant_id
+                )
+            except Exception:
+                # Fallback for old schema
+                row = await conn.fetchrow(
+                    """
+                    SELECT id, guid, name FROM kaspi_stores
+                    WHERE merchant_id = $1 AND is_active = true
+                    """,
+                    merchant_id
+                )
 
             if not row or not row['guid']:
                 logger.warning(f"No session found for merchant {merchant_id}")
@@ -588,26 +599,29 @@ async def get_active_session_with_refresh(merchant_id: str, auto_refresh: bool =
             else:
                 session_data = row['guid']
 
-            if not session_data:
-                logger.warning(f"Could not decrypt session for merchant {merchant_id}")
-                return None
+            # Validate session (even if decryption failed, we might still refresh)
+            is_valid = False
+            if session_data:
+                is_valid = await validate_session(row['guid'])
 
-            # Validate session
-            is_valid = await validate_session(row['guid'])
-
-            if is_valid:
+            if is_valid and session_data:
                 return session_data
 
-            # Session expired - attempt refresh if enabled
+            # Session expired or decryption failed - attempt refresh if enabled
             if not auto_refresh:
-                logger.warning(f"Session for merchant {merchant_id} expired, auto_refresh disabled")
+                logger.warning(f"Session for merchant {merchant_id} expired/invalid, auto_refresh disabled")
                 return None
 
-            logger.info(f"Session for merchant {merchant_id} expired, attempting auto-refresh...")
+            logger.info(f"Session for merchant {merchant_id} expired/invalid, attempting auto-refresh...")
 
-            # Get stored credentials
-            email = session_data.get('email')
-            password = session_data.get('password')
+            # Get stored credentials - try separate columns first, then from session
+            email = row.get('kaspi_email') if row else None
+            password = row.get('kaspi_password') if row else None
+
+            # Fallback to credentials from session data if available
+            if (not email or not password) and session_data:
+                email = email or session_data.get('email')
+                password = password or session_data.get('password')
 
             if not email or not password:
                 logger.error(f"No credentials stored for merchant {merchant_id}, cannot auto-refresh")

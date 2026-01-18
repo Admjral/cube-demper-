@@ -108,20 +108,41 @@ async def authenticate_store(
         shop_name = session_data.get('shop_name', f"Store {merchant_id}")
 
         # Store in database (wrap encrypted string in JSON object)
+        # Also store email/password separately for auto-reauthentication
         async with pool.acquire() as conn:
-            store = await conn.fetchrow(
-                """
-                INSERT INTO kaspi_stores (user_id, merchant_id, name, guid, is_active)
-                VALUES ($1, $2, $3, $4, true)
-                ON CONFLICT (merchant_id)
-                DO UPDATE SET guid = $4, is_active = true, updated_at = NOW()
-                RETURNING id, merchant_id
-                """,
-                current_user['id'],
-                merchant_id,
-                shop_name,
-                json.dumps({'encrypted': encrypted_guid})
-            )
+            # Try with new columns first, fallback to old schema
+            try:
+                store = await conn.fetchrow(
+                    """
+                    INSERT INTO kaspi_stores (user_id, merchant_id, name, guid, kaspi_email, kaspi_password, is_active)
+                    VALUES ($1, $2, $3, $4, $5, $6, true)
+                    ON CONFLICT (merchant_id)
+                    DO UPDATE SET guid = $4, kaspi_email = $5, kaspi_password = $6, is_active = true, needs_reauth = false, reauth_reason = NULL, updated_at = NOW()
+                    RETURNING id, merchant_id
+                    """,
+                    current_user['id'],
+                    merchant_id,
+                    shop_name,
+                    json.dumps({'encrypted': encrypted_guid}),
+                    auth_data.email,
+                    auth_data.password
+                )
+            except Exception as e:
+                # Fallback for old schema without email/password columns
+                logger.warning(f"Could not save credentials (migration may be pending): {e}")
+                store = await conn.fetchrow(
+                    """
+                    INSERT INTO kaspi_stores (user_id, merchant_id, name, guid, is_active)
+                    VALUES ($1, $2, $3, $4, true)
+                    ON CONFLICT (merchant_id)
+                    DO UPDATE SET guid = $4, is_active = true, updated_at = NOW()
+                    RETURNING id, merchant_id
+                    """,
+                    current_user['id'],
+                    merchant_id,
+                    shop_name,
+                    json.dumps({'encrypted': encrypted_guid})
+                )
 
         # Auto-sync products after successful authentication
         background_tasks.add_task(
