@@ -510,15 +510,28 @@ class DemperWorker:
                 # Apply price constraints
                 # Если min_price не задана (0), используем минимум 1 тенге
                 effective_min_price = min_price if min_price > 0 else Decimal("1")
+
                 if target_price < effective_min_price:
-                    # Ставим минимальную цену вместо отказа
-                    target_price = effective_min_price
-                    logger.debug(
-                        f"Target price for {sku} adjusted to min_price: {target_price}"
-                    )
+                    # Конкурент ниже нашего минимума - ждём, не меняем цену
+                    # Но если мы сами выше min_price, остаёмся на min_price
+                    if current_price > effective_min_price:
+                        target_price = effective_min_price
+                        logger.debug(
+                            f"Target price for {sku} adjusted to min_price: {target_price} "
+                            f"(competitor below our min)"
+                        )
+                    else:
+                        # Мы уже на минимуме или ниже, ждём повышения конкурента
+                        logger.debug(
+                            f"Competitor price for {sku} is below our min_price, waiting..."
+                        )
+                        return False
 
                 if max_price and target_price > max_price:
                     target_price = max_price
+                    logger.debug(
+                        f"Target price for {sku} capped at max_price: {target_price}"
+                    )
 
                 # Only update if price changed
                 if target_price == current_price:
@@ -573,6 +586,11 @@ class DemperWorker:
         """
         Calculate target price based on strategy.
 
+        Логика работы:
+        - Цена всегда идёт на заданный шаг ниже конкурента
+        - Если конкурент поднял цену - мы тоже поднимаем (но не выше max_price - проверяется в process_product)
+        - Если конкурент опустил цену ниже нашего min_price - мы ждём (не меняем цену)
+
         Strategies:
         - standard: Beat minimum competitor by price_step
         - always_first: Always be the cheapest (min_competitor - price_step)
@@ -591,31 +609,17 @@ class DemperWorker:
         Returns:
             Target price or None if no change needed
         """
-        if strategy == "standard":
-            # Beat minimum competitor by price_step
+        if strategy == "standard" or strategy == "always_first":
+            # Цена = минимальная цена конкурента - шаг
+            # Это работает и для снижения, и для повышения цены
             target = min_competitor_price - price_step
-            # Only reduce price if we're not already the cheapest
-            if current_price <= min_competitor_price:
-                return None
-            return target
-
-        elif strategy == "always_first":
-            # Always be the cheapest
-            target = min_competitor_price - price_step
-            # Only reduce if not already first
-            if our_position == 1:
-                return None
             return target
 
         elif strategy == "stay_top_n":
             # Stay within top N positions
             top_n = strategy_params.get("top_position", 3)
 
-            # If already in top N, no change needed
-            if our_position is not None and our_position <= top_n:
-                return None
-
-            # Find price of N-th position
+            # Find price of N-th position competitor
             competitor_count = 0
             target_price = None
 

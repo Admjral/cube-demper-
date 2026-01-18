@@ -287,6 +287,29 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
             # Fetch products from Kaspi API
             products = await get_products(merchant_id, session)
 
+            # Collect all kaspi_product_ids from API response
+            new_product_ids = [p['kaspi_product_id'] for p in products]
+
+            # Delete products that are no longer in Kaspi API
+            # This ensures we remove products that were deleted or became unavailable
+            if new_product_ids:
+                deleted_count = await conn.execute(
+                    """
+                    DELETE FROM products
+                    WHERE store_id = $1 AND kaspi_product_id != ALL($2)
+                    """,
+                    uuid.UUID(store_id),
+                    new_product_ids
+                )
+                logger.info(f"Deleted old products not in current sync: {deleted_count}")
+            else:
+                # If no products from API, delete all products for this store
+                await conn.execute(
+                    "DELETE FROM products WHERE store_id = $1",
+                    uuid.UUID(store_id)
+                )
+                logger.info(f"Deleted all products for store {store_id} (no products from API)")
+
             # Upsert products to database
             for product_data in products:
                 # Convert availabilities dict to JSON string for PostgreSQL
@@ -306,6 +329,8 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                         name = $5,
                         price = $6,
                         availabilities = $7,
+                        kaspi_sku = COALESCE($3, products.kaspi_sku),
+                        external_kaspi_id = COALESCE($4, products.external_kaspi_id),
                         updated_at = NOW()
                     """,
                     uuid.UUID(store_id),
@@ -867,18 +892,35 @@ async def run_product_demping(
             target_price = min_competitor_price - price_step
 
         # Apply min/max constraints
-        # Если min_price не задана (0), используем цену на шаг ниже конкурента но не меньше 1
+        # Если min_price не задана (0), используем минимум 1 тенге
         effective_min_price = min_price if min_price > 0 else 1
+
         if target_price < effective_min_price:
-            target_price = effective_min_price
+            # Конкурент ниже нашего минимума
+            if current_price > effective_min_price:
+                # Мы выше минимума - опускаемся до минимума
+                target_price = effective_min_price
+            else:
+                # Мы уже на минимуме или ниже - ждём повышения конкурента
+                return {
+                    "status": "waiting",
+                    "message": f"Цена конкурента ({min_competitor_price}) ниже нашего минимума ({effective_min_price}). Ждём повышения.",
+                    "product_id": product_id,
+                    "current_price": current_price,
+                    "min_price": effective_min_price,
+                    "min_competitor_price": min_competitor_price,
+                    "strategy": strategy,
+                    "offers": sorted_offers[:5]
+                }
+
         if max_price and target_price > max_price:
             target_price = max_price
 
         # Check if update is needed
-        if target_price >= current_price:
+        if target_price == current_price:
             return {
                 "status": "no_change",
-                "message": f"Изменение не требуется. Целевая цена ({target_price}) >= текущей ({current_price})",
+                "message": f"Изменение не требуется. Целевая цена ({target_price}) = текущей ({current_price})",
                 "product_id": product_id,
                 "current_price": current_price,
                 "target_price": target_price,
