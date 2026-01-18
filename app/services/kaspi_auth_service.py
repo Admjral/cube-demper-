@@ -611,15 +611,18 @@ async def get_active_session_with_refresh(merchant_id: str, auto_refresh: bool =
 
             if not email or not password:
                 logger.error(f"No credentials stored for merchant {merchant_id}, cannot auto-refresh")
-                # Mark store as needing re-authentication
-                await conn.execute(
-                    """
-                    UPDATE kaspi_stores
-                    SET needs_reauth = true, reauth_reason = 'credentials_missing', updated_at = NOW()
-                    WHERE merchant_id = $1
-                    """,
-                    merchant_id
-                )
+                # Try to mark store as needing re-authentication (column may not exist)
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE kaspi_stores
+                        SET needs_reauth = true, reauth_reason = 'credentials_missing', updated_at = NOW()
+                        WHERE merchant_id = $1
+                        """,
+                        merchant_id
+                    )
+                except Exception as e:
+                    logger.warning(f"Could not update needs_reauth (migration may be pending): {e}")
                 return None
 
             try:
@@ -645,41 +648,50 @@ async def get_active_session_with_refresh(merchant_id: str, auto_refresh: bool =
             except KaspiSMSRequiredError as e:
                 # SMS verification needed - mark store and notify
                 logger.warning(f"SMS verification required for merchant {merchant_id}")
-                await conn.execute(
-                    """
-                    UPDATE kaspi_stores
-                    SET needs_reauth = true, reauth_reason = 'sms_required', updated_at = NOW()
-                    WHERE merchant_id = $1
-                    """,
-                    merchant_id
-                )
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE kaspi_stores
+                        SET needs_reauth = true, reauth_reason = 'sms_required', updated_at = NOW()
+                        WHERE merchant_id = $1
+                        """,
+                        merchant_id
+                    )
+                except Exception as upd_err:
+                    logger.warning(f"Could not update needs_reauth: {upd_err}")
                 return None
 
             except KaspiInvalidCredentialsError as e:
                 # Credentials no longer valid
                 logger.error(f"Invalid credentials for merchant {merchant_id}")
-                await conn.execute(
-                    """
-                    UPDATE kaspi_stores
-                    SET needs_reauth = true, reauth_reason = 'invalid_credentials', updated_at = NOW()
-                    WHERE merchant_id = $1
-                    """,
-                    merchant_id
-                )
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE kaspi_stores
+                        SET needs_reauth = true, reauth_reason = 'invalid_credentials', updated_at = NOW()
+                        WHERE merchant_id = $1
+                        """,
+                        merchant_id
+                    )
+                except Exception as upd_err:
+                    logger.warning(f"Could not update needs_reauth: {upd_err}")
                 return None
 
             except KaspiAuthError as e:
                 # Other auth error
                 logger.error(f"Auth error for merchant {merchant_id}: {e}")
-                await conn.execute(
-                    """
-                    UPDATE kaspi_stores
-                    SET needs_reauth = true, reauth_reason = $1, updated_at = NOW()
-                    WHERE merchant_id = $2
-                    """,
-                    str(e)[:200],
-                    merchant_id
-                )
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE kaspi_stores
+                        SET needs_reauth = true, reauth_reason = $1, updated_at = NOW()
+                        WHERE merchant_id = $2
+                        """,
+                        str(e)[:200],
+                        merchant_id
+                    )
+                except Exception as upd_err:
+                    logger.warning(f"Could not update needs_reauth: {upd_err}")
                 return None
 
     except Exception as e:

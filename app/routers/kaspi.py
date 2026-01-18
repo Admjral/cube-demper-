@@ -736,16 +736,24 @@ async def run_product_demping(
         # Get session for this store (with auto-refresh if expired)
         session = await get_active_session_with_refresh(merchant_id)
         if not session:
-            # Check if it needs re-auth
-            reauth_info = await conn.fetchrow(
-                "SELECT needs_reauth, reauth_reason FROM kaspi_stores WHERE merchant_id = $1",
-                merchant_id
-            )
-            reason = reauth_info['reauth_reason'] if reauth_info else 'unknown'
+            # Try to check if it needs re-auth (column may not exist if migration pending)
+            reason = 'unknown'
+            try:
+                reauth_info = await conn.fetchrow(
+                    "SELECT needs_reauth, reauth_reason FROM kaspi_stores WHERE merchant_id = $1",
+                    merchant_id
+                )
+                if reauth_info:
+                    reason = reauth_info.get('reauth_reason') or 'unknown'
+            except Exception as e:
+                logger.warning(f"Could not check reauth status (migration may be pending): {e}")
+
             if reason == 'sms_required':
                 message = f"Требуется SMS верификация. Перейдите в раздел Магазины для повторной авторизации."
             elif reason == 'invalid_credentials':
                 message = f"Неверные учётные данные. Обновите логин/пароль в разделе Магазины."
+            elif reason == 'credentials_missing':
+                message = f"Учётные данные не сохранены. Переавторизуйтесь в разделе Магазины."
             else:
                 message = f"Нет активной сессии для магазина {merchant_id}. Требуется повторная авторизация."
 
