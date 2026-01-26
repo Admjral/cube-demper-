@@ -1121,27 +1121,43 @@ async def create_session_new(
 ):
     """
     Создать новую сессию WhatsApp.
-    WAHA Core поддерживает только одну сессию с именем 'default'.
+    WAHA Core: только одна сессия 'default' на всех пользователей.
+    WAHA Plus: уникальные сессии для каждого пользователя.
     """
-    # WAHA Core only supports 'default' session name
-    session_name = "default"
-
-    # Get API key from settings
     from ..config import settings
+    waha_plus = getattr(settings, 'waha_plus', False)
     waha_api_key = getattr(settings, 'waha_api_key', None) or ''
 
-    async with pool.acquire() as conn:
-        # Check if user already has a session
-        existing = await conn.fetchrow(
-            "SELECT id FROM whatsapp_sessions WHERE user_id = $1",
-            current_user['id']
-        )
+    if waha_plus:
+        # WAHA Plus: unique session per user
+        session_name = request.name or f"user_{str(current_user['id'])[:8]}"
+    else:
+        # WAHA Core: only 'default' session supported
+        session_name = "default"
 
-        if existing:
-            raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="You already have a WhatsApp session. WAHA Core supports only one session."
+    async with pool.acquire() as conn:
+        if waha_plus:
+            # WAHA Plus: check if this specific session exists for user
+            existing = await conn.fetchrow(
+                "SELECT id FROM whatsapp_sessions WHERE user_id = $1 AND session_name = $2",
+                current_user['id'], session_name
             )
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Session '{session_name}' already exists"
+                )
+        else:
+            # WAHA Core: check if ANY session exists (shared 'default')
+            existing = await conn.fetchrow(
+                "SELECT id FROM whatsapp_sessions WHERE user_id = $1",
+                current_user['id']
+            )
+            if existing:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="You already have a WhatsApp session. Upgrade to WAHA Plus for multiple sessions."
+                )
 
         # Create session in WAHA
         try:
