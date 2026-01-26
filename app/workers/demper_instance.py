@@ -518,8 +518,9 @@ class DemperWorker:
                     return False
 
                 # Apply price constraints
-                # Если min_price не задана (0), используем минимум 1 тенге
-                effective_min_price = min_price if min_price > 0 else Decimal("1")
+                # Kaspi не позволяет выставлять цену ниже 10 тенге
+                KASPI_MIN_PRICE = Decimal("10")
+                effective_min_price = max(min_price, KASPI_MIN_PRICE) if min_price > 0 else KASPI_MIN_PRICE
 
                 if target_price < effective_min_price:
                     # Конкурент ниже нашего минимума - ждём, не меняем цену

@@ -570,7 +570,7 @@ async def get_product_demping_details(
             """
             SELECT
                 p.*,
-                COALESCE(ds.price_step, 100) as store_price_step,
+                COALESCE(ds.price_step, 1) as store_price_step,
                 COALESCE(ds.min_margin_percent, 5) as store_min_margin_percent,
                 COALESCE(ds.work_hours_start, '09:00') as store_work_hours_start,
                 COALESCE(ds.work_hours_end, '21:00') as store_work_hours_end,
@@ -903,8 +903,9 @@ async def run_product_demping(
             target_price = min_competitor_price - price_step
 
         # Apply min/max constraints
-        # Если min_price не задана (0), используем минимум 1 тенге
-        effective_min_price = min_price if min_price > 0 else 1
+        # Kaspi не позволяет выставлять цену ниже 10 тенге
+        KASPI_MIN_PRICE = 10
+        effective_min_price = max(min_price, KASPI_MIN_PRICE) if min_price > 0 else KASPI_MIN_PRICE
 
         if target_price < effective_min_price:
             # Конкурент ниже нашего минимума
@@ -2088,7 +2089,9 @@ async def run_product_city_demping(
             city_id = city_price['city_id']
             city_name = city_price['city_name']
             current_price = city_price['price'] or product['price']
-            min_price = city_price['min_price'] or 1
+            # Kaspi не позволяет выставлять цену ниже 10 тенге
+            KASPI_MIN_PRICE = 10
+            min_price = max(city_price['min_price'] or 0, KASPI_MIN_PRICE)
             max_price = city_price['max_price']
 
             try:
