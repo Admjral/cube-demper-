@@ -352,7 +352,8 @@ async def send_message(
                 detail="No WhatsApp session found. Create one first."
             )
 
-        if session['status'] != WahaSessionStatus.WORKING.value:
+        # Accept both our internal "connected" status and WAHA's "WORKING" status
+        if session['status'] not in ('connected', 'WORKING', WahaSessionStatus.WORKING.value):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"WhatsApp session not ready. Current status: {session['status']}. Please scan QR code first."
@@ -1029,7 +1030,8 @@ async def _get_active_session(user_id: UUID, pool: asyncpg.Pool) -> str:
                 detail="No WhatsApp session found. Create one first."
             )
 
-        if session['status'] != WahaSessionStatus.WORKING.value:
+        # Accept both our internal "connected" status and WAHA's "WORKING" status
+        if session['status'] not in ('connected', 'WORKING', WahaSessionStatus.WORKING.value):
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"WhatsApp session not ready. Current status: {session['status']}. Please scan QR code first."
