@@ -1121,20 +1121,26 @@ async def create_session_new(
 ):
     """
     Создать новую сессию WhatsApp.
+    WAHA Core поддерживает только одну сессию с именем 'default'.
     """
-    session_name = request.name or f"session_{current_user['id']}"
+    # WAHA Core only supports 'default' session name
+    session_name = "default"
+
+    # Get API key from settings
+    from ..config import settings
+    waha_api_key = getattr(settings, 'waha_api_key', None) or ''
 
     async with pool.acquire() as conn:
-        # Check if session already exists
+        # Check if user already has a session
         existing = await conn.fetchrow(
-            "SELECT id FROM whatsapp_sessions WHERE user_id = $1 AND session_name = $2",
-            current_user['id'], session_name
+            "SELECT id FROM whatsapp_sessions WHERE user_id = $1",
+            current_user['id']
         )
 
         if existing:
             raise HTTPException(
                 status_code=status.HTTP_409_CONFLICT,
-                detail=f"Session '{session_name}' already exists"
+                detail="You already have a WhatsApp session. WAHA Core supports only one session."
             )
 
         # Create session in WAHA
@@ -1145,10 +1151,10 @@ async def create_session_new(
 
         # Insert into database
         session = await conn.fetchrow("""
-            INSERT INTO whatsapp_sessions (user_id, session_name, status, waha_container_name, waha_port)
-            VALUES ($1, $2, 'connecting', 'demper_waha', 3000)
+            INSERT INTO whatsapp_sessions (user_id, session_name, status, waha_container_name, waha_port, waha_api_key)
+            VALUES ($1, $2, 'connecting', 'demper_waha', 3000, $3)
             RETURNING id, user_id, session_name, phone_number, status, created_at, updated_at
-        """, current_user['id'], session_name)
+        """, current_user['id'], session_name, waha_api_key)
 
         return SessionListResponse(
             id=str(session['id']),
