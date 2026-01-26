@@ -1219,11 +1219,21 @@ async def get_session_qr_by_id(
         session_name = session['session_name'] or 'default'
 
         try:
-            # Get QR code as PNG image bytes
-            qr_bytes = await waha.get_qr_code(session_name, format="image")
+            # Get QR code from WAHA - returns JSON with mimetype and data fields
+            qr_response = await waha.get_qr_code(session_name, format="image")
 
-            # Convert to base64 for frontend
-            qr_base64 = base64.b64encode(qr_bytes).decode('utf-8')
+            # WAHA returns either:
+            # - bytes (raw PNG)
+            # - dict with {"mimetype": "image/png", "data": "base64..."}
+            if isinstance(qr_response, dict):
+                # Extract base64 data from JSON response
+                qr_base64 = qr_response.get("data", "")
+            elif isinstance(qr_response, bytes):
+                # Convert raw bytes to base64
+                qr_base64 = base64.b64encode(qr_response).decode('utf-8')
+            else:
+                # Assume it's already a string
+                qr_base64 = str(qr_response)
 
             # Update status
             await conn.execute(

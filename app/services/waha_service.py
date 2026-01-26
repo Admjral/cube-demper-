@@ -293,7 +293,11 @@ class WahaService:
             )
             
             if response.status_code == 200:
-                if qr_format == "image":
+                content_type = response.headers.get("content-type", "")
+                # WAHA may return JSON even for "image" format
+                if "application/json" in content_type:
+                    return response.json()
+                elif qr_format == "image":
                     return response.content  # PNG bytes
                 return response.json()
             elif response.status_code == 404:
