@@ -14,6 +14,7 @@ from typing import Annotated, List, Optional
 from pydantic import BaseModel
 import asyncpg
 import logging
+import base64
 from uuid import UUID
 from datetime import datetime
 
@@ -1218,7 +1219,11 @@ async def get_session_qr_by_id(
         session_name = session['session_name'] or 'default'
 
         try:
-            qr_data = await waha.get_qr_code(session_name, format="raw")
+            # Get QR code as PNG image bytes
+            qr_bytes = await waha.get_qr_code(session_name, format="image")
+
+            # Convert to base64 for frontend
+            qr_base64 = base64.b64encode(qr_bytes).decode('utf-8')
 
             # Update status
             await conn.execute(
@@ -1226,9 +1231,7 @@ async def get_session_qr_by_id(
                 session_uuid
             )
 
-            # Extract the actual QR value from response
-            qr_value = qr_data.get("value") if isinstance(qr_data, dict) else qr_data
-            return {"qr_code": qr_value, "status": "qr_pending"}
+            return {"qr_code": qr_base64, "status": "qr_pending"}
         except WahaError as e:
             # Check if session is already connected
             try:
