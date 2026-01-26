@@ -1145,8 +1145,8 @@ async def create_session_new(
 
         # Insert into database
         session = await conn.fetchrow("""
-            INSERT INTO whatsapp_sessions (user_id, session_name, status)
-            VALUES ($1, $2, 'connecting')
+            INSERT INTO whatsapp_sessions (user_id, session_name, status, waha_container_name, waha_port)
+            VALUES ($1, $2, 'connecting', 'demper_waha', 3000)
             RETURNING id, user_id, session_name, phone_number, status, created_at, updated_at
         """, current_user['id'], session_name)
 
