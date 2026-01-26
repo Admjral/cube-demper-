@@ -10,10 +10,12 @@ WhatsApp router - WAHA API integration for messaging
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Response
-from typing import Annotated, List
+from typing import Annotated, List, Optional
+from pydantic import BaseModel
 import asyncpg
 import logging
 from uuid import UUID
+from datetime import datetime
 
 from ..schemas.whatsapp import (
     WhatsAppSessionResponse,
