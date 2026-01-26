@@ -351,3 +351,243 @@ async def get_salesman_history(
             ],
             "total": len(messages),
         }
+
+
+# ==================== AI SALESMAN SETTINGS ====================
+
+class AISalesmanSettingsResponse(BaseModel):
+    """Настройки AI Salesman для магазина"""
+    store_id: str
+    store_name: str
+    ai_enabled: bool
+    ai_tone: Optional[str] = None
+    ai_discount_percent: Optional[int] = None
+    ai_promo_code: Optional[str] = None
+    ai_review_bonus: Optional[str] = None
+    ai_send_delay_minutes: int = 10
+    ai_max_messages_per_day: int = 50
+
+
+class UpdateAISalesmanSettingsRequest(BaseModel):
+    """Запрос на обновление настроек AI Salesman"""
+    ai_enabled: Optional[bool] = None
+    ai_tone: Optional[str] = None
+    ai_discount_percent: Optional[int] = None
+    ai_promo_code: Optional[str] = None
+    ai_review_bonus: Optional[str] = None
+    ai_send_delay_minutes: Optional[int] = None
+    ai_max_messages_per_day: Optional[int] = None
+
+
+@router.get("/salesman/settings", response_model=List[AISalesmanSettingsResponse])
+async def get_salesman_settings(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """
+    Получить настройки AI Salesman для всех магазинов пользователя.
+    """
+    async with pool.acquire() as conn:
+        stores = await conn.fetch("""
+            SELECT
+                id, name,
+                COALESCE(ai_enabled, true) as ai_enabled,
+                ai_tone, ai_discount_percent, ai_promo_code, ai_review_bonus,
+                COALESCE(ai_send_delay_minutes, 10) as ai_send_delay_minutes,
+                COALESCE(ai_max_messages_per_day, 50) as ai_max_messages_per_day
+            FROM kaspi_stores
+            WHERE user_id = $1
+        """, current_user['id'])
+
+        return [
+            AISalesmanSettingsResponse(
+                store_id=str(s['id']),
+                store_name=s['name'],
+                ai_enabled=s['ai_enabled'],
+                ai_tone=s['ai_tone'],
+                ai_discount_percent=s['ai_discount_percent'],
+                ai_promo_code=s['ai_promo_code'],
+                ai_review_bonus=s['ai_review_bonus'],
+                ai_send_delay_minutes=s['ai_send_delay_minutes'],
+                ai_max_messages_per_day=s['ai_max_messages_per_day'],
+            )
+            for s in stores
+        ]
+
+
+@router.put("/salesman/settings/{store_id}", response_model=AISalesmanSettingsResponse)
+async def update_salesman_settings(
+    store_id: str,
+    request: UpdateAISalesmanSettingsRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """
+    Обновить настройки AI Salesman для магазина.
+    """
+    try:
+        store_uuid = UUID(store_id)
+    except ValueError:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Invalid store_id format"
+        )
+
+    async with pool.acquire() as conn:
+        # Check ownership
+        store = await conn.fetchrow(
+            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            store_uuid, current_user['id']
+        )
+
+        if not store:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Store not found or access denied"
+            )
+
+        # Build update query
+        updates = []
+        params = []
+        param_count = 0
+
+        if request.ai_enabled is not None:
+            param_count += 1
+            updates.append(f"ai_enabled = ${param_count}")
+            params.append(request.ai_enabled)
+
+        if request.ai_tone is not None:
+            param_count += 1
+            updates.append(f"ai_tone = ${param_count}")
+            params.append(request.ai_tone)
+
+        if request.ai_discount_percent is not None:
+            param_count += 1
+            updates.append(f"ai_discount_percent = ${param_count}")
+            params.append(request.ai_discount_percent)
+
+        if request.ai_promo_code is not None:
+            param_count += 1
+            updates.append(f"ai_promo_code = ${param_count}")
+            params.append(request.ai_promo_code)
+
+        if request.ai_review_bonus is not None:
+            param_count += 1
+            updates.append(f"ai_review_bonus = ${param_count}")
+            params.append(request.ai_review_bonus)
+
+        if request.ai_send_delay_minutes is not None:
+            param_count += 1
+            updates.append(f"ai_send_delay_minutes = ${param_count}")
+            params.append(request.ai_send_delay_minutes)
+
+        if request.ai_max_messages_per_day is not None:
+            param_count += 1
+            updates.append(f"ai_max_messages_per_day = ${param_count}")
+            params.append(request.ai_max_messages_per_day)
+
+        if not updates:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update"
+            )
+
+        param_count += 1
+        params.append(store_uuid)
+
+        query = f"""
+            UPDATE kaspi_stores
+            SET {', '.join(updates)}, updated_at = NOW()
+            WHERE id = ${param_count}
+            RETURNING
+                id, name,
+                COALESCE(ai_enabled, true) as ai_enabled,
+                ai_tone, ai_discount_percent, ai_promo_code, ai_review_bonus,
+                COALESCE(ai_send_delay_minutes, 10) as ai_send_delay_minutes,
+                COALESCE(ai_max_messages_per_day, 50) as ai_max_messages_per_day
+        """
+
+        updated = await conn.fetchrow(query, *params)
+
+        return AISalesmanSettingsResponse(
+            store_id=str(updated['id']),
+            store_name=updated['name'],
+            ai_enabled=updated['ai_enabled'],
+            ai_tone=updated['ai_tone'],
+            ai_discount_percent=updated['ai_discount_percent'],
+            ai_promo_code=updated['ai_promo_code'],
+            ai_review_bonus=updated['ai_review_bonus'],
+            ai_send_delay_minutes=updated['ai_send_delay_minutes'],
+            ai_max_messages_per_day=updated['ai_max_messages_per_day'],
+        )
+
+
+@router.get("/salesman/stats")
+async def get_salesman_stats(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    days: int = 7,
+):
+    """
+    Получить статистику AI Salesman.
+    """
+    async with pool.acquire() as conn:
+        # Get user's stores
+        stores = await conn.fetch(
+            "SELECT id FROM kaspi_stores WHERE user_id = $1",
+            current_user['id']
+        )
+        store_ids = [s['id'] for s in stores]
+
+        if not store_ids:
+            return {
+                "total_messages": 0,
+                "by_trigger": {},
+                "by_day": [],
+                "top_products": [],
+            }
+
+        # Total messages and by trigger
+        trigger_stats = await conn.fetch("""
+            SELECT trigger_type, COUNT(*) as count
+            FROM ai_salesman_messages
+            WHERE store_id = ANY($1::uuid[])
+            GROUP BY trigger_type
+        """, store_ids)
+
+        by_trigger = {row['trigger_type']: row['count'] for row in trigger_stats}
+        total_messages = sum(by_trigger.values())
+
+        # Messages by day
+        by_day = await conn.fetch("""
+            SELECT DATE(created_at) as date, COUNT(*) as count
+            FROM ai_salesman_messages
+            WHERE store_id = ANY($1::uuid[])
+            AND created_at >= CURRENT_DATE - $2::integer
+            GROUP BY DATE(created_at)
+            ORDER BY date
+        """, store_ids, days)
+
+        # Top suggested products
+        top_products = await conn.fetch("""
+            SELECT unnest(products_suggested) as product, COUNT(*) as count
+            FROM ai_salesman_messages
+            WHERE store_id = ANY($1::uuid[])
+            AND products_suggested IS NOT NULL
+            GROUP BY product
+            ORDER BY count DESC
+            LIMIT 10
+        """, store_ids)
+
+        return {
+            "total_messages": total_messages,
+            "by_trigger": by_trigger,
+            "by_day": [
+                {"date": str(row['date']), "count": row['count']}
+                for row in by_day
+            ],
+            "top_products": [
+                {"product": row['product'], "count": row['count']}
+                for row in top_products
+            ],
+        }

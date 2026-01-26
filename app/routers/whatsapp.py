@@ -764,6 +764,232 @@ async def delete_template(
     return {"message": "Template deleted successfully"}
 
 
+# ==================== MESSAGE HISTORY ====================
+
+class WhatsAppMessageResponse(BaseModel):
+    """Ответ с информацией о сообщении"""
+    id: str
+    recipient_phone: str
+    recipient_name: Optional[str]
+    message_content: str
+    message_type: str
+    status: str
+    template_name: Optional[str] = None
+    error_message: Optional[str] = None
+    sent_at: Optional[datetime] = None
+    delivered_at: Optional[datetime] = None
+    read_at: Optional[datetime] = None
+    created_at: datetime
+
+
+class MessageHistoryResponse(BaseModel):
+    """Ответ со списком сообщений"""
+    messages: List[WhatsAppMessageResponse]
+    total: int
+    page: int
+    per_page: int
+
+
+@router.get("/messages", response_model=MessageHistoryResponse)
+async def get_message_history(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    status_filter: Optional[str] = None,
+    phone: Optional[str] = None,
+    date_from: Optional[str] = None,
+    date_to: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 50,
+):
+    """
+    Получить историю отправленных сообщений.
+
+    Фильтры:
+    - status_filter: pending, sent, delivered, read, failed
+    - phone: фильтр по номеру телефона
+    - date_from, date_to: фильтр по дате (YYYY-MM-DD)
+    """
+    async with pool.acquire() as conn:
+        # Build query with filters
+        conditions = ["m.user_id = $1"]
+        params = [current_user['id']]
+        param_count = 1
+
+        if status_filter:
+            param_count += 1
+            conditions.append(f"m.status = ${param_count}")
+            params.append(status_filter)
+
+        if phone:
+            param_count += 1
+            conditions.append(f"m.recipient_phone LIKE ${param_count}")
+            params.append(f"%{phone}%")
+
+        if date_from:
+            param_count += 1
+            conditions.append(f"m.created_at >= ${param_count}::date")
+            params.append(date_from)
+
+        if date_to:
+            param_count += 1
+            conditions.append(f"m.created_at < ${param_count}::date + interval '1 day'")
+            params.append(date_to)
+
+        where_clause = " AND ".join(conditions)
+
+        # Get total count
+        count_query = f"SELECT COUNT(*) FROM whatsapp_messages m WHERE {where_clause}"
+        total = await conn.fetchval(count_query, *params)
+
+        # Get messages with pagination
+        offset = (page - 1) * per_page
+        param_count += 1
+        limit_param = param_count
+        param_count += 1
+        offset_param = param_count
+
+        query = f"""
+            SELECT
+                m.id, m.recipient_phone, m.recipient_name, m.message_content,
+                m.message_type, m.status, m.error_message,
+                m.sent_at, m.delivered_at, m.read_at, m.created_at,
+                t.name as template_name
+            FROM whatsapp_messages m
+            LEFT JOIN whatsapp_templates t ON m.template_id = t.id
+            WHERE {where_clause}
+            ORDER BY m.created_at DESC
+            LIMIT ${limit_param} OFFSET ${offset_param}
+        """
+
+        messages = await conn.fetch(query, *params, per_page, offset)
+
+        return MessageHistoryResponse(
+            messages=[
+                WhatsAppMessageResponse(
+                    id=str(m['id']),
+                    recipient_phone=m['recipient_phone'],
+                    recipient_name=m['recipient_name'],
+                    message_content=m['message_content'],
+                    message_type=m['message_type'],
+                    status=m['status'],
+                    template_name=m['template_name'],
+                    error_message=m['error_message'],
+                    sent_at=m['sent_at'],
+                    delivered_at=m['delivered_at'],
+                    read_at=m['read_at'],
+                    created_at=m['created_at'],
+                )
+                for m in messages
+            ],
+            total=total or 0,
+            page=page,
+            per_page=per_page,
+        )
+
+
+# ==================== STATISTICS ====================
+
+class WhatsAppStatsResponse(BaseModel):
+    """Статистика WhatsApp сообщений"""
+    total_sent: int
+    total_delivered: int
+    total_read: int
+    total_failed: int
+    total_pending: int
+    delivery_rate: float
+    read_rate: float
+    today_sent: int
+    today_limit: int
+    messages_by_day: List[dict]
+
+
+@router.get("/stats", response_model=WhatsAppStatsResponse)
+async def get_whatsapp_stats(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    days: int = 7,
+):
+    """
+    Получить статистику WhatsApp сообщений.
+
+    Args:
+        days: количество дней для графика (по умолчанию 7)
+    """
+    async with pool.acquire() as conn:
+        # Overall stats
+        stats = await conn.fetchrow("""
+            SELECT
+                COUNT(*) FILTER (WHERE status IN ('sent', 'delivered', 'read')) as total_sent,
+                COUNT(*) FILTER (WHERE status IN ('delivered', 'read')) as total_delivered,
+                COUNT(*) FILTER (WHERE status = 'read') as total_read,
+                COUNT(*) FILTER (WHERE status = 'failed') as total_failed,
+                COUNT(*) FILTER (WHERE status = 'pending') as total_pending
+            FROM whatsapp_messages
+            WHERE user_id = $1
+        """, current_user['id'])
+
+        total_sent = stats['total_sent'] or 0
+        total_delivered = stats['total_delivered'] or 0
+        total_read = stats['total_read'] or 0
+
+        delivery_rate = (total_delivered / total_sent * 100) if total_sent > 0 else 0
+        read_rate = (total_read / total_delivered * 100) if total_delivered > 0 else 0
+
+        # Today's stats
+        today_sent = await conn.fetchval("""
+            SELECT COUNT(*)
+            FROM whatsapp_messages
+            WHERE user_id = $1
+            AND created_at >= CURRENT_DATE
+            AND status != 'failed'
+        """, current_user['id']) or 0
+
+        # Get daily limit from settings or default
+        settings = await conn.fetchrow("""
+            SELECT daily_limit
+            FROM whatsapp_settings
+            WHERE user_id = $1
+        """, current_user['id'])
+        today_limit = settings['daily_limit'] if settings else 100
+
+        # Messages by day for chart
+        messages_by_day = await conn.fetch("""
+            SELECT
+                DATE(created_at) as date,
+                COUNT(*) FILTER (WHERE status IN ('sent', 'delivered', 'read')) as sent,
+                COUNT(*) FILTER (WHERE status IN ('delivered', 'read')) as delivered,
+                COUNT(*) FILTER (WHERE status = 'read') as read,
+                COUNT(*) FILTER (WHERE status = 'failed') as failed
+            FROM whatsapp_messages
+            WHERE user_id = $1
+            AND created_at >= CURRENT_DATE - $2::integer
+            GROUP BY DATE(created_at)
+            ORDER BY date
+        """, current_user['id'], days)
+
+        return WhatsAppStatsResponse(
+            total_sent=total_sent,
+            total_delivered=total_delivered,
+            total_read=total_read,
+            total_failed=stats['total_failed'] or 0,
+            total_pending=stats['total_pending'] or 0,
+            delivery_rate=round(delivery_rate, 1),
+            read_rate=round(read_rate, 1),
+            today_sent=today_sent,
+            today_limit=today_limit,
+            messages_by_day=[
+                {
+                    "date": str(row['date']),
+                    "sent": row['sent'],
+                    "delivered": row['delivered'],
+                    "read": row['read'],
+                    "failed": row['failed'],
+                }
+                for row in messages_by_day
+            ],
+        )
+
+
 # ==================== HELPER FUNCTIONS ====================
 
 def _session_to_response(session) -> WhatsAppSessionResponse:
