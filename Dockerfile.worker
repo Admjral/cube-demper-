@@ -36,5 +36,8 @@ RUN playwright install chromium
 # Copy application
 COPY . .
 
+# Create logs directory
+RUN mkdir -p logs
+
 # Run worker
 CMD ["python", "-m", "app.workers.demper_instance"]
