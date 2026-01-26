@@ -1,7 +1,7 @@
 """AI router - OpenAI assistants (Lawyer, Accountant, Salesman)"""
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from typing import Annotated, List
+from typing import Annotated, List, Optional
 from pydantic import BaseModel, Field
 import asyncpg
 import logging
