@@ -321,9 +321,9 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                     """
                     INSERT INTO products (
                         store_id, kaspi_product_id, kaspi_sku, external_kaspi_id,
-                        name, price, availabilities
+                        name, price, availabilities, bot_active
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, false)
                     ON CONFLICT (store_id, kaspi_product_id)
                     DO UPDATE SET
                         name = $5,
