@@ -699,9 +699,12 @@ def get_waha_service() -> WahaService:
     
     if _waha_service is None:
         from ..config import settings
-        
+
+        # Remove trailing slash from URL to prevent double slashes
+        waha_url = getattr(settings, 'waha_url', 'http://waha:3000').rstrip('/')
+
         config = WahaConfig(
-            base_url=getattr(settings, 'waha_url', 'http://waha:3000'),
+            base_url=waha_url,
             api_key=getattr(settings, 'waha_api_key', None),
             webhook_url=getattr(settings, 'waha_webhook_url', None),
         )
