@@ -180,8 +180,11 @@ def _map_offer(raw_offer: dict) -> dict:
                     "pre_order": pre_order
                 }
 
+    # Use offerId if available, otherwise fall back to sku
+    kaspi_product_id = raw_offer.get("offerId") or raw_offer.get("sku")
+
     return {
-        "kaspi_product_id": raw_offer.get("offerId"),
+        "kaspi_product_id": kaspi_product_id,
         "kaspi_sku": raw_offer.get("sku"),
         "name": raw_offer.get("masterTitle"),
         "brand": raw_offer.get("brand"),
