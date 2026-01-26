@@ -1161,9 +1161,16 @@ async def create_session_new(
 
         # Create session in WAHA
         try:
-            await waha.create_session(session_name)
+            result = await waha.create_session(session_name)
+            logger.info(f"WAHA session created: {result}")
         except WahaError as e:
-            logger.warning(f"WAHA session creation warning: {e}")
+            # If session already exists in WAHA, that's OK - continue
+            if "already exists" not in str(e).lower():
+                logger.error(f"WAHA session creation failed: {e}")
+                raise HTTPException(
+                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    detail=f"Failed to create WAHA session: {e.message}"
+                )
 
         # Insert into database
         session = await conn.fetchrow("""
@@ -1211,7 +1218,7 @@ async def get_session_qr_by_id(
         session_name = session['session_name'] or 'default'
 
         try:
-            qr_data = await waha.get_qr(session_name)
+            qr_data = await waha.get_qr_code(session_name, format="raw")
 
             # Update status
             await conn.execute(
@@ -1219,18 +1226,20 @@ async def get_session_qr_by_id(
                 session_uuid
             )
 
-            return {"qr_code": qr_data, "status": "qr_pending"}
+            # Extract the actual QR value from response
+            qr_value = qr_data.get("value") if isinstance(qr_data, dict) else qr_data
+            return {"qr_code": qr_value, "status": "qr_pending"}
         except WahaError as e:
             # Check if session is already connected
             try:
-                status_info = await waha.get_session_status(session_name)
+                status_info = await waha.get_session(session_name)
                 if status_info.get('status') == 'WORKING':
                     await conn.execute(
                         "UPDATE whatsapp_sessions SET status = 'connected', updated_at = NOW() WHERE id = $1",
                         session_uuid
                     )
                     return {"qr_code": None, "status": "connected"}
-            except:
+            except Exception:
                 pass
             raise HTTPException(status_code=500, detail=str(e))
 
