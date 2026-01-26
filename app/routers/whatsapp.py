@@ -1035,3 +1035,343 @@ async def _get_active_session(user_id: UUID, pool: asyncpg.Pool) -> str:
             )
 
         return session['session_name']
+
+
+# ==================== SESSIONS API (matching frontend) ====================
+
+class SessionListResponse(BaseModel):
+    """Список сессий пользователя"""
+    id: str
+    user_id: str
+    session_name: str
+    phone_number: Optional[str] = None
+    status: str
+    last_seen: Optional[datetime] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class CreateSessionRequest(BaseModel):
+    """Запрос на создание сессии"""
+    name: str
+
+
+class SettingsResponse(BaseModel):
+    """Настройки WhatsApp пользователя"""
+    id: str
+    user_id: str
+    daily_limit: int
+    interval_seconds: int
+    work_hours_start: str
+    work_hours_end: str
+    work_days: List[int]
+    auto_reply_enabled: bool
+    created_at: datetime
+    updated_at: datetime
+
+
+class UpdateSettingsRequest(BaseModel):
+    """Запрос на обновление настроек"""
+    daily_limit: Optional[int] = None
+    interval_seconds: Optional[int] = None
+    work_hours_start: Optional[str] = None
+    work_hours_end: Optional[str] = None
+    work_days: Optional[List[int]] = None
+    auto_reply_enabled: Optional[bool] = None
+
+
+@router.get("/sessions", response_model=List[SessionListResponse])
+async def list_sessions(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """
+    Получить все сессии пользователя.
+    """
+    async with pool.acquire() as conn:
+        sessions = await conn.fetch("""
+            SELECT id, user_id, session_name, phone_number, status,
+                   created_at, updated_at, created_at as last_seen
+            FROM whatsapp_sessions
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+        """, current_user['id'])
+
+        return [
+            SessionListResponse(
+                id=str(s['id']),
+                user_id=str(s['user_id']),
+                session_name=s['session_name'] or 'default',
+                phone_number=s['phone_number'],
+                status=s['status'] or 'disconnected',
+                last_seen=s['last_seen'],
+                created_at=s['created_at'],
+                updated_at=s['updated_at'],
+            )
+            for s in sessions
+        ]
+
+
+@router.post("/sessions", response_model=SessionListResponse, status_code=status.HTTP_201_CREATED)
+async def create_session_new(
+    request: CreateSessionRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    waha: Annotated[WahaService, Depends(get_waha)],
+):
+    """
+    Создать новую сессию WhatsApp.
+    """
+    session_name = request.name or f"session_{current_user['id']}"
+
+    async with pool.acquire() as conn:
+        # Check if session already exists
+        existing = await conn.fetchrow(
+            "SELECT id FROM whatsapp_sessions WHERE user_id = $1 AND session_name = $2",
+            current_user['id'], session_name
+        )
+
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Session '{session_name}' already exists"
+            )
+
+        # Create session in WAHA
+        try:
+            await waha.create_session(session_name)
+        except WahaError as e:
+            logger.warning(f"WAHA session creation warning: {e}")
+
+        # Insert into database
+        session = await conn.fetchrow("""
+            INSERT INTO whatsapp_sessions (user_id, session_name, status)
+            VALUES ($1, $2, 'connecting')
+            RETURNING id, user_id, session_name, phone_number, status, created_at, updated_at
+        """, current_user['id'], session_name)
+
+        return SessionListResponse(
+            id=str(session['id']),
+            user_id=str(session['user_id']),
+            session_name=session['session_name'],
+            phone_number=session['phone_number'],
+            status=session['status'],
+            last_seen=None,
+            created_at=session['created_at'],
+            updated_at=session['updated_at'],
+        )
+
+
+@router.get("/sessions/{session_id}/qr")
+async def get_session_qr_by_id(
+    session_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    waha: Annotated[WahaService, Depends(get_waha)],
+):
+    """
+    Получить QR код для конкретной сессии.
+    """
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
+
+    async with pool.acquire() as conn:
+        session = await conn.fetchrow(
+            "SELECT session_name, status FROM whatsapp_sessions WHERE id = $1 AND user_id = $2",
+            session_uuid, current_user['id']
+        )
+
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session_name = session['session_name'] or 'default'
+
+        try:
+            qr_data = await waha.get_qr(session_name)
+
+            # Update status
+            await conn.execute(
+                "UPDATE whatsapp_sessions SET status = 'qr_pending', updated_at = NOW() WHERE id = $1",
+                session_uuid
+            )
+
+            return {"qr_code": qr_data, "status": "qr_pending"}
+        except WahaError as e:
+            # Check if session is already connected
+            try:
+                status_info = await waha.get_session_status(session_name)
+                if status_info.get('status') == 'WORKING':
+                    await conn.execute(
+                        "UPDATE whatsapp_sessions SET status = 'connected', updated_at = NOW() WHERE id = $1",
+                        session_uuid
+                    )
+                    return {"qr_code": None, "status": "connected"}
+            except:
+                pass
+            raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.delete("/sessions/{session_id}")
+async def delete_session_by_id(
+    session_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    waha: Annotated[WahaService, Depends(get_waha)],
+):
+    """
+    Удалить сессию WhatsApp.
+    """
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
+
+    async with pool.acquire() as conn:
+        session = await conn.fetchrow(
+            "SELECT session_name FROM whatsapp_sessions WHERE id = $1 AND user_id = $2",
+            session_uuid, current_user['id']
+        )
+
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session_name = session['session_name'] or 'default'
+
+        # Delete from WAHA
+        try:
+            await waha.delete_session(session_name)
+        except WahaError as e:
+            logger.warning(f"WAHA session deletion warning: {e}")
+
+        # Delete from database
+        await conn.execute(
+            "DELETE FROM whatsapp_sessions WHERE id = $1",
+            session_uuid
+        )
+
+        return {"success": True}
+
+
+@router.get("/settings", response_model=SettingsResponse)
+async def get_whatsapp_settings(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """
+    Получить настройки WhatsApp пользователя.
+    """
+    async with pool.acquire() as conn:
+        settings = await conn.fetchrow("""
+            SELECT * FROM whatsapp_settings WHERE user_id = $1
+        """, current_user['id'])
+
+        if not settings:
+            # Create default settings
+            settings = await conn.fetchrow("""
+                INSERT INTO whatsapp_settings (user_id)
+                VALUES ($1)
+                RETURNING *
+            """, current_user['id'])
+
+        return SettingsResponse(
+            id=str(settings['id']),
+            user_id=str(settings['user_id']),
+            daily_limit=settings['daily_limit'] or 100,
+            interval_seconds=settings['interval_seconds'] or 30,
+            work_hours_start=settings['work_hours_start'] or '09:00',
+            work_hours_end=settings['work_hours_end'] or '21:00',
+            work_days=settings['work_days'] or [1, 2, 3, 4, 5],
+            auto_reply_enabled=settings['auto_reply_enabled'] or False,
+            created_at=settings['created_at'],
+            updated_at=settings['updated_at'],
+        )
+
+
+@router.patch("/settings", response_model=SettingsResponse)
+async def update_whatsapp_settings(
+    request: UpdateSettingsRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """
+    Обновить настройки WhatsApp пользователя.
+    """
+    async with pool.acquire() as conn:
+        # Ensure settings exist
+        existing = await conn.fetchrow(
+            "SELECT id FROM whatsapp_settings WHERE user_id = $1",
+            current_user['id']
+        )
+
+        if not existing:
+            await conn.execute(
+                "INSERT INTO whatsapp_settings (user_id) VALUES ($1)",
+                current_user['id']
+            )
+
+        # Build update query
+        updates = []
+        params = []
+        param_count = 0
+
+        if request.daily_limit is not None:
+            param_count += 1
+            updates.append(f"daily_limit = ${param_count}")
+            params.append(request.daily_limit)
+
+        if request.interval_seconds is not None:
+            param_count += 1
+            updates.append(f"interval_seconds = ${param_count}")
+            params.append(request.interval_seconds)
+
+        if request.work_hours_start is not None:
+            param_count += 1
+            updates.append(f"work_hours_start = ${param_count}")
+            params.append(request.work_hours_start)
+
+        if request.work_hours_end is not None:
+            param_count += 1
+            updates.append(f"work_hours_end = ${param_count}")
+            params.append(request.work_hours_end)
+
+        if request.work_days is not None:
+            param_count += 1
+            updates.append(f"work_days = ${param_count}")
+            params.append(request.work_days)
+
+        if request.auto_reply_enabled is not None:
+            param_count += 1
+            updates.append(f"auto_reply_enabled = ${param_count}")
+            params.append(request.auto_reply_enabled)
+
+        if updates:
+            param_count += 1
+            params.append(current_user['id'])
+
+            query = f"""
+                UPDATE whatsapp_settings
+                SET {', '.join(updates)}, updated_at = NOW()
+                WHERE user_id = ${param_count}
+                RETURNING *
+            """
+            settings = await conn.fetchrow(query, *params)
+        else:
+            settings = await conn.fetchrow(
+                "SELECT * FROM whatsapp_settings WHERE user_id = $1",
+                current_user['id']
+            )
+
+        return SettingsResponse(
+            id=str(settings['id']),
+            user_id=str(settings['user_id']),
+            daily_limit=settings['daily_limit'] or 100,
+            interval_seconds=settings['interval_seconds'] or 30,
+            work_hours_start=settings['work_hours_start'] or '09:00',
+            work_hours_end=settings['work_hours_end'] or '21:00',
+            work_days=settings['work_days'] or [1, 2, 3, 4, 5],
+            auto_reply_enabled=settings['auto_reply_enabled'] or False,
+            created_at=settings['created_at'],
+            updated_at=settings['updated_at'],
+        )
