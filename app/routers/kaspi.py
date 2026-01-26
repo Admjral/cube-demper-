@@ -1,7 +1,8 @@
 """Kaspi router - handles Kaspi store management, authentication, and product sync"""
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from typing import Annotated, List, Optional
+from typing import Annotated, List, Optional, Dict, Any
+from pydantic import BaseModel
 import asyncpg
 import uuid
 import logging
@@ -2253,3 +2254,196 @@ async def run_product_city_demping(
             total_cities=len(city_prices),
             successful_updates=successful_updates
         )
+
+
+# ============================================================================
+# Order Events - WhatsApp Integration
+# ============================================================================
+
+from ..services.kaspi_mc_service import get_kaspi_mc_service, KaspiMCError
+from ..services.order_event_processor import (
+    get_order_event_processor,
+    OrderEvent,
+    process_new_kaspi_order,
+)
+
+
+class OrderCustomerResponse(BaseModel):
+    """Customer data from order"""
+    phone: Optional[str]
+    first_name: Optional[str]
+    last_name: Optional[str]
+    full_name: Optional[str]
+    order_state: Optional[str]
+    order_total: Optional[float]
+    items: List[Dict[str, Any]] = []
+
+    class Config:
+        from_attributes = True
+
+
+class OrderEventRequest(BaseModel):
+    """Request to process order event"""
+    store_id: str
+    order_code: str
+    event: str  # order_approved, order_shipped, etc.
+
+
+class OrderEventResponse(BaseModel):
+    """Result of processing order event"""
+    status: str
+    message_id: Optional[str] = None
+    recipient: Optional[str] = None
+    error: Optional[str] = None
+
+
+@router.get("/orders/{store_id}/{order_code}/customer")
+async def get_order_customer(
+    store_id: str,
+    order_code: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+) -> OrderCustomerResponse:
+    """
+    Получить данные покупателя по коду заказа.
+
+    Парсит данные из Kaspi MC через GraphQL API.
+    Требуется активная сессия авторизации.
+    """
+    # Verify store belongs to user
+    async with pool.acquire() as conn:
+        store = await conn.fetchrow(
+            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id), current_user['id']
+        )
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+
+    try:
+        mc_service = get_kaspi_mc_service()
+        customer_data = await mc_service.get_order_customer_phone(
+            user_id=str(current_user['id']),
+            store_id=store_id,
+            order_code=order_code,
+            pool=pool,
+        )
+
+        if not customer_data:
+            raise HTTPException(status_code=404, detail="Order not found")
+
+        return OrderCustomerResponse(
+            phone=customer_data.get('phone'),
+            first_name=customer_data.get('first_name'),
+            last_name=customer_data.get('last_name'),
+            full_name=customer_data.get('full_name'),
+            order_state=customer_data.get('order_state'),
+            order_total=customer_data.get('order_total'),
+            items=customer_data.get('items', []),
+        )
+
+    except KaspiMCError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.post("/orders/event")
+async def process_order_event(
+    request: OrderEventRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+) -> OrderEventResponse:
+    """
+    Обработать событие заказа и отправить WhatsApp сообщение.
+
+    Находит шаблон по trigger_event и отправляет сообщение покупателю.
+    """
+    # Verify store belongs to user
+    async with pool.acquire() as conn:
+        store = await conn.fetchrow(
+            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(request.store_id), current_user['id']
+        )
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+
+    # Validate event type
+    try:
+        event = OrderEvent(request.event)
+    except ValueError:
+        valid_events = [e.value for e in OrderEvent]
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid event type. Valid events: {', '.join(valid_events)}"
+        )
+
+    # Process the event
+    processor = get_order_event_processor()
+    result = await processor.process_order_event(
+        user_id=str(current_user['id']),
+        store_id=request.store_id,
+        order_code=request.order_code,
+        event=event,
+        pool=pool,
+    )
+
+    if not result:
+        return OrderEventResponse(status="no_action")
+
+    return OrderEventResponse(
+        status=result.get('status', 'unknown'),
+        message_id=result.get('message_id'),
+        recipient=result.get('recipient'),
+        error=result.get('error'),
+    )
+
+
+@router.get("/orders/{store_id}/recent")
+async def get_recent_orders(
+    store_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    limit: int = 50,
+    state: Optional[str] = None,
+) -> List[Dict[str, Any]]:
+    """
+    Получить список последних заказов магазина из Kaspi MC.
+
+    Args:
+        limit: Максимальное количество заказов (по умолчанию 50)
+        state: Фильтр по статусу (APPROVED, DELIVERY, COMPLETED и т.д.)
+    """
+    # Verify store belongs to user
+    async with pool.acquire() as conn:
+        store = await conn.fetchrow(
+            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id), current_user['id']
+        )
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+
+    try:
+        mc_service = get_kaspi_mc_service()
+        orders = await mc_service.get_recent_orders(
+            user_id=str(current_user['id']),
+            store_id=store_id,
+            pool=pool,
+            limit=limit,
+            state_filter=state,
+        )
+        return orders
+
+    except KaspiMCError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
+@router.get("/orders/events/types")
+async def get_order_event_types() -> List[Dict[str, str]]:
+    """Получить список доступных типов событий для шаблонов WhatsApp"""
+    return [
+        {"value": OrderEvent.ORDER_APPROVED.value, "label": "Заказ оплачен", "kaspi_state": "APPROVED"},
+        {"value": OrderEvent.ORDER_ACCEPTED_BY_MERCHANT.value, "label": "Заказ принят", "kaspi_state": "ACCEPTED_BY_MERCHANT"},
+        {"value": OrderEvent.ORDER_SHIPPED.value, "label": "Заказ отправлен", "kaspi_state": "DELIVERY"},
+        {"value": OrderEvent.ORDER_DELIVERED.value, "label": "Заказ доставлен", "kaspi_state": "DELIVERED"},
+        {"value": OrderEvent.ORDER_COMPLETED.value, "label": "Заказ завершён", "kaspi_state": "COMPLETED"},
+        {"value": OrderEvent.ORDER_CANCELLED.value, "label": "Заказ отменён", "kaspi_state": "CANCELLED"},
+        {"value": OrderEvent.REVIEW_REQUEST.value, "label": "Запрос отзыва", "kaspi_state": None},
+    ]

@@ -39,6 +39,17 @@ from .ai_salesman_service import (
     process_order_for_upsell,
     get_ai_salesman,
 )
+from .kaspi_mc_service import (
+    KaspiMCService,
+    KaspiMCError,
+    get_kaspi_mc_service,
+)
+from .order_event_processor import (
+    OrderEventProcessor,
+    OrderEvent,
+    get_order_event_processor,
+    process_new_kaspi_order,
+)
 
 __all__ = [
     # Kaspi Auth
@@ -76,4 +87,13 @@ __all__ = [
     "SalesmanMessage",
     "process_order_for_upsell",
     "get_ai_salesman",
+    # Kaspi MC
+    "KaspiMCService",
+    "KaspiMCError",
+    "get_kaspi_mc_service",
+    # Order Event Processor
+    "OrderEventProcessor",
+    "OrderEvent",
+    "get_order_event_processor",
+    "process_new_kaspi_order",
 ]
