@@ -156,6 +156,18 @@ class KaspiMCService:
                     return None
 
                 customer = order_detail.get("customer", {})
+                delivery = order_detail.get("deliveryAddress", {}) or {}
+
+                # Форматируем адрес доставки
+                address_parts = []
+                if delivery.get('city'):
+                    address_parts.append(delivery['city'])
+                if delivery.get('street'):
+                    address_parts.append(delivery['street'])
+                if delivery.get('building'):
+                    address_parts.append(f"д. {delivery['building']}")
+                if delivery.get('apartment'):
+                    address_parts.append(f"кв. {delivery['apartment']}")
 
                 return {
                     "phone": f"+7{customer.get('phoneNumber', '')}" if customer.get('phoneNumber') else None,
@@ -163,9 +175,13 @@ class KaspiMCService:
                     "first_name": customer.get('firstName'),
                     "last_name": customer.get('lastName'),
                     "full_name": f"{customer.get('firstName', '')} {customer.get('lastName', '')}".strip() or None,
+                    "order_code": order_detail.get('code'),
                     "order_state": order_detail.get('state'),
                     "order_total": order_detail.get('totalPrice'),
+                    "order_date": order_detail.get('createdAt'),
                     "items": order_detail.get('entries', []),
+                    "delivery_address": ", ".join(address_parts) if address_parts else None,
+                    "delivery_city": delivery.get('city'),
                 }
 
         except httpx.RequestError as e:

@@ -58,15 +58,25 @@ class OrderEventProcessor:
     """
 
     # Шаблонные переменные для замены
+    # Формат: {placeholder} -> data_key
     TEMPLATE_VARIABLES = {
-        "{customer_name}": "customer_name",
-        "{customer_first_name}": "customer_first_name",
-        "{order_code}": "order_code",
-        "{order_total}": "order_total",
-        "{store_name}": "store_name",
-        "{items_list}": "items_list",
-        "{delivery_address}": "delivery_address",
-        "{promo_code}": "promo_code",
+        # Клиент
+        "{customer_name}": "customer_name",           # Полное имя: "Иван Петров"
+        "{customer_first_name}": "customer_first_name", # Имя: "Иван"
+        # Заказ
+        "{order_code}": "order_code",                 # Код заказа: "790686780"
+        "{order_total}": "order_total",               # Сумма: "15 000 тг"
+        "{order_total_raw}": "order_total_raw",       # Сумма число: "15000"
+        # Товары
+        "{items_list}": "items_list",                 # Список товаров
+        "{items_count}": "items_count",               # Кол-во товаров: "3"
+        "{first_item}": "first_item",                 # Первый товар: "iPhone 15"
+        # Доставка
+        "{delivery_address}": "delivery_address",     # Адрес: "Алматы, ул. Абая, д. 1"
+        "{delivery_city}": "delivery_city",           # Город: "Алматы"
+        # Магазин
+        "{store_name}": "store_name",                 # Название магазина
+        "{promo_code}": "promo_code",                 # Промокод
     }
 
     def __init__(self):
@@ -144,14 +154,26 @@ class OrderEventProcessor:
             """, UUID(store_id), UUID(user_id))
 
             # 5. Формируем данные для замены переменных
+            order_total = order_data.get('order_total', 0) or 0
+            items = order_data.get('items', [])
+
             variables_data = {
+                # Клиент
                 "customer_name": order_data.get('full_name') or order_data.get('first_name') or 'Покупатель',
                 "customer_first_name": order_data.get('first_name') or 'Покупатель',
+                # Заказ
                 "order_code": order_code,
-                "order_total": f"{order_data.get('order_total', 0):,.0f}".replace(",", " ") + " тг",
+                "order_total": f"{order_total:,.0f}".replace(",", " ") + " тг",
+                "order_total_raw": str(int(order_total)),
+                # Товары
+                "items_list": self._format_items_list(items),
+                "items_count": str(len(items)),
+                "first_item": items[0].get('productName', 'Товар') if items else '',
+                # Доставка
+                "delivery_address": order_data.get('delivery_address') or "",
+                "delivery_city": order_data.get('delivery_city') or "",
+                # Магазин
                 "store_name": store['name'] if store else "Наш магазин",
-                "items_list": self._format_items_list(order_data.get('items', [])),
-                "delivery_address": "",  # TODO: добавить адрес если есть
                 "promo_code": store.get('ai_promo_code', '') if store else '',
             }
 
