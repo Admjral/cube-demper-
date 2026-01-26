@@ -1,7 +1,7 @@
 """Kaspi router - handles Kaspi store management, authentication, and product sync"""
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
-from typing import Annotated, List
+from typing import Annotated, List, Optional
 import asyncpg
 import uuid
 import logging
