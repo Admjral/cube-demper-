@@ -72,6 +72,7 @@ class DempingSettings(BaseModel):
     work_hours_start: str = Field("09:00", pattern=r"^\d{2}:\d{2}$")
     work_hours_end: str = Field("21:00", pattern=r"^\d{2}:\d{2}$")
     is_enabled: bool = True
+    excluded_merchant_ids: List[str] = Field(default_factory=list, description="Merchant IDs to exclude from competition (e.g., own stores)")
     last_check: Optional[datetime] = None
     created_at: datetime
     updated_at: datetime
@@ -90,6 +91,7 @@ class DempingSettingsUpdate(BaseModel):
     work_hours_start: Optional[str] = Field(None, pattern=r"^\d{2}:\d{2}$")
     work_hours_end: Optional[str] = Field(None, pattern=r"^\d{2}:\d{2}$")
     is_enabled: Optional[bool] = None
+    excluded_merchant_ids: Optional[List[str]] = Field(None, description="Merchant IDs to exclude from competition (e.g., own stores)")
 
 
 class ProductDempingDetails(BaseModel):
@@ -177,3 +179,122 @@ class TopProduct(BaseModel):
     current_price: int
     sales_count: int = 0
     revenue: int = 0
+
+
+# ============================================================================
+# City-based Pricing Schemas
+# ============================================================================
+
+# Available cities for Kaspi
+KASPI_CITIES = {
+    "750000000": "Алматы",
+    "770000000": "Астана",
+    "730000000": "Шымкент",
+    "710000000": "Караганда",
+    "790000000": "Актобе",
+    "630000000": "Атырау",
+    "610000000": "Актау",
+    "510000000": "Костанай",
+    "550000000": "Павлодар",
+    "590000000": "Семей",
+    "620000000": "Уральск",
+    "470000000": "Тараз",
+    "310000000": "Усть-Каменогорск",
+    "350000000": "Кызылорда",
+    "430000000": "Талдыкорган",
+    "530000000": "Петропавловск",
+    "570000000": "Экибастуз",
+    "390000000": "Туркестан",
+}
+
+
+class CityInfo(BaseModel):
+    """City information"""
+    city_id: str
+    city_name: str
+
+
+class ProductCityPriceBase(BaseModel):
+    """Base schema for product city price"""
+    city_id: str
+    city_name: str
+    price: Optional[int] = None
+    min_price: Optional[int] = None
+    max_price: Optional[int] = None
+    bot_active: bool = True
+
+
+class ProductCityPriceCreate(BaseModel):
+    """Schema for creating city price"""
+    city_id: str
+    price: Optional[int] = None
+    min_price: Optional[int] = None
+    max_price: Optional[int] = None
+    bot_active: bool = True
+
+
+class ProductCityPriceUpdate(BaseModel):
+    """Schema for updating city price"""
+    price: Optional[int] = None
+    min_price: Optional[int] = None
+    max_price: Optional[int] = None
+    bot_active: Optional[bool] = None
+
+
+class ProductCityPriceResponse(BaseModel):
+    """Schema for city price response"""
+    id: str
+    product_id: str
+    city_id: str
+    city_name: str
+    price: Optional[int] = None
+    min_price: Optional[int] = None
+    max_price: Optional[int] = None
+    bot_active: bool = True
+    last_check_time: Optional[datetime] = None
+    competitor_price: Optional[int] = None
+    our_position: Optional[int] = None
+    created_at: datetime
+    updated_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class ProductCityPricesRequest(BaseModel):
+    """Schema for setting up city prices for a product"""
+    apply_to_all_cities: bool = True  # If true, use same settings for all cities
+    cities: List[ProductCityPriceCreate] = []  # Specific city settings
+
+
+class ProductWithCityPrices(BaseModel):
+    """Product with all its city prices"""
+    product_id: str
+    product_name: str
+    kaspi_sku: Optional[str]
+    base_price: int  # Default price from products table
+    city_prices: List[ProductCityPriceResponse] = []
+
+    class Config:
+        from_attributes = True
+
+
+class CityDempingResult(BaseModel):
+    """Result of demping for a single city"""
+    city_id: str
+    city_name: str
+    status: str  # success, no_change, waiting, error, no_competitors
+    message: str
+    old_price: Optional[int] = None
+    new_price: Optional[int] = None
+    competitor_price: Optional[int] = None
+    our_position: Optional[int] = None
+
+
+class MultiCityDempingResult(BaseModel):
+    """Result of demping across multiple cities"""
+    product_id: str
+    product_name: str
+    results: List[CityDempingResult]
+    total_cities: int
+    successful_updates: int

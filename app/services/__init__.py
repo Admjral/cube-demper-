@@ -21,6 +21,24 @@ from .api_parser import (
     validate_merchant_session,
     get_merchant_session,
 )
+from .waha_service import (
+    WahaService,
+    WahaConfig,
+    WahaError,
+    WahaConnectionError,
+    WahaSessionError,
+    WahaMessageError,
+    WahaSessionStatus,
+    get_waha_service,
+)
+from .ai_salesman_service import (
+    AISalesmanService,
+    SalesmanTrigger,
+    OrderContext,
+    SalesmanMessage,
+    process_order_for_upsell,
+    get_ai_salesman,
+)
 
 __all__ = [
     # Kaspi Auth
@@ -42,4 +60,20 @@ __all__ = [
     "batch_sync_products",
     "validate_merchant_session",
     "get_merchant_session",
+    # WAHA
+    "WahaService",
+    "WahaConfig",
+    "WahaError",
+    "WahaConnectionError",
+    "WahaSessionError",
+    "WahaMessageError",
+    "WahaSessionStatus",
+    "get_waha_service",
+    # AI Salesman
+    "AISalesmanService",
+    "SalesmanTrigger",
+    "OrderContext",
+    "SalesmanMessage",
+    "process_order_for_upsell",
+    "get_ai_salesman",
 ]

@@ -301,7 +301,8 @@ class DemperWorker:
                         COALESCE(ds.work_hours_start, '09:00') as work_hours_start,
                         COALESCE(ds.work_hours_end, '21:00') as work_hours_end,
                         COALESCE(ds.price_step, 1) as store_price_step,
-                        COALESCE(ds.is_enabled, true) as demping_enabled
+                        COALESCE(ds.is_enabled, true) as demping_enabled,
+                        COALESCE(ds.excluded_merchant_ids, '{}') as excluded_merchant_ids
                     FROM products
                     JOIN kaspi_stores ON kaspi_stores.id = products.store_id
                     LEFT JOIN demping_settings ds ON ds.store_id = products.store_id
@@ -424,6 +425,11 @@ class DemperWorker:
             strategy = product.get("demping_strategy") or "standard"
             strategy_params = product.get("strategy_params") or {}
 
+            # Get excluded merchant IDs (own stores that should not be considered as competitors)
+            excluded_merchant_ids = set(product.get("excluded_merchant_ids") or [])
+            # Always exclude our own merchant_id
+            excluded_merchant_ids.add(merchant_id)
+
             try:
                 # Small random delay to avoid synchronized bursts
                 await asyncio.sleep(random.uniform(0.01, 0.1))
@@ -456,6 +462,7 @@ class DemperWorker:
                     logger.info(f"Found {len(offers)} offers for SKU {sku} (merchant {merchant_id})")
 
                 # Sort offers by price and find our position
+                # Mark offers as excluded if they belong to excluded_merchant_ids
                 sorted_offers = []
                 our_price = None
                 our_position = None
@@ -464,31 +471,34 @@ class DemperWorker:
                     offer_merchant_id = offer.get("merchantId")
                     offer_price = offer.get("price")
                     if offer_price is not None:
+                        is_ours = offer_merchant_id == merchant_id
+                        is_excluded = offer_merchant_id in excluded_merchant_ids
                         sorted_offers.append({
                             "merchant_id": offer_merchant_id,
                             "price": Decimal(str(offer_price)),
-                            "is_ours": offer_merchant_id == merchant_id
+                            "is_ours": is_ours,
+                            "is_excluded": is_excluded  # Own stores or excluded merchants
                         })
-                        if offer_merchant_id == merchant_id:
+                        if is_ours:
                             our_price = Decimal(str(offer_price))
 
                 sorted_offers.sort(key=lambda x: x["price"])
 
-                # Find our position and competitor prices
+                # Find our position among ALL offers (including excluded)
                 for i, offer in enumerate(sorted_offers):
                     if offer["is_ours"]:
                         our_position = i + 1
                         break
 
-                # Find minimum competitor price (excluding our own)
+                # Find minimum competitor price (excluding our own and excluded merchants)
                 min_competitor_price = None
                 for offer in sorted_offers:
-                    if not offer["is_ours"]:
+                    if not offer["is_excluded"]:
                         min_competitor_price = offer["price"]
                         break
 
                 if min_competitor_price is None:
-                    logger.debug(f"No competitor offers for product {sku}")
+                    logger.debug(f"No competitor offers for product {sku} (all offers are from excluded merchants)")
                     return False
 
                 # Calculate target price based on strategy

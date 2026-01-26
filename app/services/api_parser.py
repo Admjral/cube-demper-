@@ -92,9 +92,17 @@ X_KS_CITY = [
     "730000000",  # Shymkent
 ]
 
+# Default city for API requests
+DEFAULT_CITY_ID = "750000000"  # Almaty
 
-def _get_random_headers(sku: Optional[str] = None) -> dict:
-    """Generate random headers to avoid detection"""
+
+def _get_random_headers(sku: Optional[str] = None, city_id: Optional[str] = None) -> dict:
+    """Generate random headers to avoid detection
+    
+    Args:
+        sku: Optional SKU for referer header
+        city_id: City ID for x-ks-city header (defaults to Almaty)
+    """
     headers = {
         "accept": "application/json, text/plain, */*",
         "accept-encoding": random.choice(ACCEPT_ENCODINGS),
@@ -108,7 +116,7 @@ def _get_random_headers(sku: Optional[str] = None) -> dict:
         "sec-fetch-mode": "cors",
         "sec-fetch-dest": "empty",
         "user-agent": random.choice(USER_AGENTS),
-        "x-ks-city": X_KS_CITY[0],
+        "x-ks-city": city_id or DEFAULT_CITY_ID,
     }
 
     if sku:
@@ -292,7 +300,7 @@ async def get_products(
     return all_offers
 
 
-async def parse_product_by_sku(product_id: str, session: dict = None) -> dict:
+async def parse_product_by_sku(product_id: str, session: dict = None, city_id: Optional[str] = None) -> dict:
     """
     Parse product details by product ID using Kaspi public offers API.
 
@@ -301,6 +309,7 @@ async def parse_product_by_sku(product_id: str, session: dict = None) -> dict:
     Args:
         product_id: Kaspi product ID (external_kaspi_id)
         session: Optional session data (not required for public API)
+        city_id: City ID for getting city-specific prices (defaults to Almaty)
 
     Returns:
         Product data with offers and prices
@@ -308,7 +317,8 @@ async def parse_product_by_sku(product_id: str, session: dict = None) -> dict:
     Raises:
         Exception: If parsing fails
     """
-    logger.info(f"Fetching offers for product ID: {product_id}")
+    effective_city_id = city_id or DEFAULT_CITY_ID
+    logger.info(f"Fetching offers for product ID: {product_id}, city: {effective_city_id}")
 
     rate_limiter = get_global_rate_limiter()
 
@@ -318,14 +328,14 @@ async def parse_product_by_sku(product_id: str, session: dict = None) -> dict:
     # Use public offers API (no auth required)
     url = f"https://kaspi.kz/yml/offer-view/offers/{product_id}"
 
-    # Standard headers for public API
+    # Standard headers for public API with city
     headers = {
         "accept": "application/json, text/plain, */*",
         "accept-encoding": "gzip, deflate, br",
         "accept-language": "ru-RU,ru;q=0.9",
         "content-type": "application/json",
         "user-agent": random.choice(USER_AGENTS),
-        "x-ks-city": "750000000",  # Almaty
+        "x-ks-city": effective_city_id,
         "origin": "https://kaspi.kz",
         "referer": f"https://kaspi.kz/shop/p/-{product_id}/",
         "sec-fetch-dest": "empty",
@@ -334,7 +344,7 @@ async def parse_product_by_sku(product_id: str, session: dict = None) -> dict:
     }
 
     # Request body with city
-    body = {"cityId": "750000000"}
+    body = {"cityId": effective_city_id}
 
     max_retries = 3
     for attempt in range(max_retries):
@@ -483,21 +493,23 @@ async def sync_product(
             raise
 
 
-async def get_competitor_price(product_id: str) -> Optional[int]:
+async def get_competitor_price(product_id: str, city_id: Optional[str] = None) -> Optional[int]:
     """
     Get lowest competitor price for a product.
 
     Args:
         product_id: Kaspi product ID (external_kaspi_id)
+        city_id: City ID for getting city-specific prices
 
     Returns:
         Lowest competitor price or None if not found
     """
-    logger.info(f"Fetching competitor price for product ID: {product_id}")
+    effective_city_id = city_id or DEFAULT_CITY_ID
+    logger.info(f"Fetching competitor price for product ID: {product_id}, city: {effective_city_id}")
 
     try:
         # Parse product to get all offers
-        product_data = await parse_product_by_sku(product_id)
+        product_data = await parse_product_by_sku(product_id, city_id=effective_city_id)
 
         if not product_data or 'offers' not in product_data:
             logger.warning(f"No offers found for product {product_id}")

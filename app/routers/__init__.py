@@ -7,5 +7,6 @@ from . import whatsapp
 from . import ai
 from . import billing
 from . import admin
+from . import invoices
 
-__all__ = ["auth", "kaspi", "preorders", "whatsapp", "ai", "billing", "admin"]
+__all__ = ["auth", "kaspi", "preorders", "whatsapp", "ai", "billing", "admin", "invoices"]

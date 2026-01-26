@@ -756,7 +756,8 @@ async def run_product_demping(
                 p.*,
                 ks.merchant_id,
                 ks.guid,
-                COALESCE(ds.price_step, 1) as store_price_step
+                COALESCE(ds.price_step, 1) as store_price_step,
+                COALESCE(ds.excluded_merchant_ids, '{}') as excluded_merchant_ids
             FROM products p
             JOIN kaspi_stores ks ON ks.id = p.store_id
             LEFT JOIN demping_settings ds ON ds.store_id = p.store_id
@@ -778,6 +779,10 @@ async def run_product_demping(
         min_price = product['min_price'] or product['min_profit'] or 0
         max_price = product['max_price']
         price_step = product['price_step_override'] or product['store_price_step']
+        
+        # Get excluded merchant IDs (own stores that should not be considered as competitors)
+        excluded_merchant_ids = set(product['excluded_merchant_ids'] or [])
+        excluded_merchant_ids.add(merchant_id)  # Always exclude our own merchant
         strategy = product['demping_strategy'] or 'standard'
 
         # Get session for this store (with auto-refresh if expired)
@@ -845,7 +850,7 @@ async def run_product_demping(
                 "offers_count": 0
             }
 
-        # Find minimum competitor price (excluding our offer)
+        # Find minimum competitor price (excluding our offer and excluded merchants)
         min_competitor_price = None
         our_position = None
         sorted_offers = []
@@ -855,15 +860,18 @@ async def run_product_demping(
             offer_price = offer.get("price")
 
             if offer_price is not None:
+                is_ours = offer_merchant_id == merchant_id
+                is_excluded = offer_merchant_id in excluded_merchant_ids
                 sorted_offers.append({
                     "merchant_id": offer_merchant_id,
                     "price": offer_price,
-                    "is_ours": offer_merchant_id == merchant_id
+                    "is_ours": is_ours,
+                    "is_excluded": is_excluded
                 })
 
-                if offer_merchant_id == merchant_id:
+                if is_ours:
                     our_position = i + 1
-                elif min_competitor_price is None or offer_price < min_competitor_price:
+                elif not is_excluded and (min_competitor_price is None or offer_price < min_competitor_price):
                     min_competitor_price = offer_price
 
         # Sort by price
@@ -872,18 +880,21 @@ async def run_product_demping(
         if min_competitor_price is None:
             return {
                 "status": "no_competitors",
-                "message": "Вы единственный продавец",
+                "message": "Вы единственный продавец (или все конкуренты исключены)",
                 "product_id": product_id,
                 "current_price": current_price,
                 "offers": sorted_offers[:5]
             }
 
         # Calculate target price based on strategy
+        # Filter out excluded offers for strategy calculations
+        competitor_offers = [o for o in sorted_offers if not o['is_excluded']]
+        
         if strategy == 'always_first':
             target_price = min_competitor_price - price_step  # На price_step дешевле
         elif strategy == 'stay_top_n':
             top_position = (product['strategy_params'] or {}).get('top_position', 3)
-            prices = [o['price'] for o in sorted_offers if not o['is_ours']]
+            prices = [o['price'] for o in competitor_offers]
             if len(prices) >= top_position:
                 target_price = prices[top_position - 1] - price_step
             else:
@@ -1109,7 +1120,8 @@ async def get_store_demping_settings(
             is_enabled=settings['is_enabled'],
             last_check=settings['last_check'],
             created_at=settings['created_at'],
-            updated_at=settings['updated_at']
+            updated_at=settings['updated_at'],
+            excluded_merchant_ids=settings['excluded_merchant_ids'] or []
         )
 
 
@@ -1189,7 +1201,8 @@ async def update_store_demping_settings(
             is_enabled=settings['is_enabled'],
             last_check=settings['last_check'],
             created_at=settings['created_at'],
-            updated_at=settings['updated_at']
+            updated_at=settings['updated_at'],
+            excluded_merchant_ids=settings['excluded_merchant_ids'] or []
         )
 
 
@@ -1665,4 +1678,575 @@ async def update_product_price(
             availabilities=updated['availabilities'],
             created_at=updated['created_at'],
             updated_at=updated['updated_at']
+        )
+
+
+# ============================================================================
+# City-based Pricing Endpoints
+# ============================================================================
+
+from ..schemas.kaspi import (
+    KASPI_CITIES,
+    CityInfo,
+    ProductCityPriceCreate,
+    ProductCityPriceUpdate,
+    ProductCityPriceResponse,
+    ProductCityPricesRequest,
+    ProductWithCityPrices,
+    CityDempingResult,
+    MultiCityDempingResult,
+)
+
+
+@router.get("/cities", response_model=List[CityInfo])
+async def list_cities():
+    """Get list of available Kaspi cities"""
+    return [
+        CityInfo(city_id=city_id, city_name=city_name)
+        for city_id, city_name in KASPI_CITIES.items()
+    ]
+
+
+@router.get("/products/{product_id}/city-prices", response_model=List[ProductCityPriceResponse])
+async def get_product_city_prices(
+    product_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get all city prices for a product"""
+    async with pool.acquire() as conn:
+        # Verify ownership
+        product = await conn.fetchrow(
+            """
+            SELECT p.id FROM products p
+            JOIN kaspi_stores k ON k.id = p.store_id
+            WHERE p.id = $1 AND k.user_id = $2
+            """,
+            uuid.UUID(product_id),
+            current_user['id']
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found"
+            )
+
+        # Get city prices
+        city_prices = await conn.fetch(
+            """
+            SELECT * FROM product_city_prices
+            WHERE product_id = $1
+            ORDER BY city_name
+            """,
+            uuid.UUID(product_id)
+        )
+
+        return [
+            ProductCityPriceResponse(
+                id=str(cp['id']),
+                product_id=str(cp['product_id']),
+                city_id=cp['city_id'],
+                city_name=cp['city_name'],
+                price=cp['price'],
+                min_price=cp['min_price'],
+                max_price=cp['max_price'],
+                bot_active=cp['bot_active'],
+                last_check_time=cp['last_check_time'],
+                competitor_price=cp['competitor_price'],
+                our_position=cp['our_position'],
+                created_at=cp['created_at'],
+                updated_at=cp['updated_at']
+            )
+            for cp in city_prices
+        ]
+
+
+@router.post("/products/{product_id}/city-prices", response_model=List[ProductCityPriceResponse])
+async def set_product_city_prices(
+    product_id: str,
+    request: ProductCityPricesRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Set city prices for a product. Can apply to all cities or specific ones."""
+    async with pool.acquire() as conn:
+        # Verify ownership and get product
+        product = await conn.fetchrow(
+            """
+            SELECT p.* FROM products p
+            JOIN kaspi_stores k ON k.id = p.store_id
+            WHERE p.id = $1 AND k.user_id = $2
+            """,
+            uuid.UUID(product_id),
+            current_user['id']
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found"
+            )
+
+        created_prices = []
+
+        if request.apply_to_all_cities:
+            # Apply same settings to all cities
+            # Use first city settings as template, or product defaults
+            template = request.cities[0] if request.cities else ProductCityPriceCreate(
+                city_id="",
+                price=product['price'],
+                min_price=product['min_price'],
+                max_price=product['max_price'],
+                bot_active=product['bot_active']
+            )
+
+            for city_id, city_name in KASPI_CITIES.items():
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO product_city_prices (
+                        product_id, city_id, city_name, price, min_price, max_price, bot_active
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (product_id, city_id)
+                    DO UPDATE SET
+                        price = $4,
+                        min_price = $5,
+                        max_price = $6,
+                        bot_active = $7,
+                        updated_at = NOW()
+                    RETURNING *
+                    """,
+                    uuid.UUID(product_id),
+                    city_id,
+                    city_name,
+                    template.price,
+                    template.min_price,
+                    template.max_price,
+                    template.bot_active
+                )
+                created_prices.append(row)
+        else:
+            # Apply specific city settings
+            for city_price in request.cities:
+                city_name = KASPI_CITIES.get(city_price.city_id)
+                if not city_name:
+                    raise HTTPException(
+                        status_code=status.HTTP_400_BAD_REQUEST,
+                        detail=f"Unknown city_id: {city_price.city_id}"
+                    )
+
+                row = await conn.fetchrow(
+                    """
+                    INSERT INTO product_city_prices (
+                        product_id, city_id, city_name, price, min_price, max_price, bot_active
+                    )
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
+                    ON CONFLICT (product_id, city_id)
+                    DO UPDATE SET
+                        price = $4,
+                        min_price = $5,
+                        max_price = $6,
+                        bot_active = $7,
+                        updated_at = NOW()
+                    RETURNING *
+                    """,
+                    uuid.UUID(product_id),
+                    city_price.city_id,
+                    city_name,
+                    city_price.price,
+                    city_price.min_price,
+                    city_price.max_price,
+                    city_price.bot_active
+                )
+                created_prices.append(row)
+
+        return [
+            ProductCityPriceResponse(
+                id=str(cp['id']),
+                product_id=str(cp['product_id']),
+                city_id=cp['city_id'],
+                city_name=cp['city_name'],
+                price=cp['price'],
+                min_price=cp['min_price'],
+                max_price=cp['max_price'],
+                bot_active=cp['bot_active'],
+                last_check_time=cp['last_check_time'],
+                competitor_price=cp['competitor_price'],
+                our_position=cp['our_position'],
+                created_at=cp['created_at'],
+                updated_at=cp['updated_at']
+            )
+            for cp in created_prices
+        ]
+
+
+@router.patch("/products/{product_id}/city-prices/{city_id}", response_model=ProductCityPriceResponse)
+async def update_product_city_price(
+    product_id: str,
+    city_id: str,
+    update_data: ProductCityPriceUpdate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Update city price settings for a product"""
+    async with pool.acquire() as conn:
+        # Verify ownership
+        product = await conn.fetchrow(
+            """
+            SELECT p.id FROM products p
+            JOIN kaspi_stores k ON k.id = p.store_id
+            WHERE p.id = $1 AND k.user_id = $2
+            """,
+            uuid.UUID(product_id),
+            current_user['id']
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found"
+            )
+
+        # Build update query
+        update_dict = update_data.dict(exclude_unset=True)
+        if not update_dict:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No fields to update"
+            )
+
+        set_clauses = []
+        values = [uuid.UUID(product_id), city_id]
+        param_num = 3
+
+        for field, value in update_dict.items():
+            set_clauses.append(f"{field} = ${param_num}")
+            values.append(value)
+            param_num += 1
+
+        updated = await conn.fetchrow(
+            f"""
+            UPDATE product_city_prices
+            SET {', '.join(set_clauses)}, updated_at = NOW()
+            WHERE product_id = $1 AND city_id = $2
+            RETURNING *
+            """,
+            *values
+        )
+
+        if not updated:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"City price not found for city {city_id}"
+            )
+
+        return ProductCityPriceResponse(
+            id=str(updated['id']),
+            product_id=str(updated['product_id']),
+            city_id=updated['city_id'],
+            city_name=updated['city_name'],
+            price=updated['price'],
+            min_price=updated['min_price'],
+            max_price=updated['max_price'],
+            bot_active=updated['bot_active'],
+            last_check_time=updated['last_check_time'],
+            competitor_price=updated['competitor_price'],
+            our_position=updated['our_position'],
+            created_at=updated['created_at'],
+            updated_at=updated['updated_at']
+        )
+
+
+@router.delete("/products/{product_id}/city-prices/{city_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_product_city_price(
+    product_id: str,
+    city_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Delete city price for a product"""
+    async with pool.acquire() as conn:
+        # Verify ownership
+        product = await conn.fetchrow(
+            """
+            SELECT p.id FROM products p
+            JOIN kaspi_stores k ON k.id = p.store_id
+            WHERE p.id = $1 AND k.user_id = $2
+            """,
+            uuid.UUID(product_id),
+            current_user['id']
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found"
+            )
+
+        result = await conn.execute(
+            """
+            DELETE FROM product_city_prices
+            WHERE product_id = $1 AND city_id = $2
+            """,
+            uuid.UUID(product_id),
+            city_id
+        )
+
+        if result == "DELETE 0":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"City price not found for city {city_id}"
+            )
+
+    return None
+
+
+@router.post("/products/{product_id}/run-city-demping", response_model=MultiCityDempingResult)
+async def run_product_city_demping(
+    product_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    city_ids: Optional[List[str]] = None
+):
+    """
+    Run demping for a product across multiple cities.
+    If city_ids is not provided, runs for all configured city prices.
+    """
+    async with pool.acquire() as conn:
+        # Get product with store info
+        product = await conn.fetchrow(
+            """
+            SELECT
+                p.*,
+                ks.merchant_id,
+                ks.guid,
+                COALESCE(ds.price_step, 1) as store_price_step,
+                COALESCE(ds.excluded_merchant_ids, '{}') as excluded_merchant_ids
+            FROM products p
+            JOIN kaspi_stores ks ON ks.id = p.store_id
+            LEFT JOIN demping_settings ds ON ds.store_id = p.store_id
+            WHERE p.id = $1 AND ks.user_id = $2
+            """,
+            uuid.UUID(product_id),
+            current_user['id']
+        )
+
+        if not product:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Product not found"
+            )
+
+        # Get city prices to process
+        if city_ids:
+            city_prices = await conn.fetch(
+                """
+                SELECT * FROM product_city_prices
+                WHERE product_id = $1 AND city_id = ANY($2) AND bot_active = true
+                """,
+                uuid.UUID(product_id),
+                city_ids
+            )
+        else:
+            city_prices = await conn.fetch(
+                """
+                SELECT * FROM product_city_prices
+                WHERE product_id = $1 AND bot_active = true
+                """,
+                uuid.UUID(product_id)
+            )
+
+        if not city_prices:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="No active city prices configured for this product"
+            )
+
+        external_id = product['external_kaspi_id']
+        merchant_id = product['merchant_id']
+        price_step = product['price_step_override'] or product['store_price_step']
+        
+        # Get excluded merchant IDs
+        excluded_merchant_ids = set(product['excluded_merchant_ids'] or [])
+        excluded_merchant_ids.add(merchant_id)
+        strategy = product['demping_strategy'] or 'standard'
+
+        # Get session
+        session = await get_active_session_with_refresh(merchant_id)
+        if not session:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="No active session. Please re-authenticate."
+            )
+
+        results = []
+        successful_updates = 0
+
+        # Process each city
+        for city_price in city_prices:
+            city_id = city_price['city_id']
+            city_name = city_price['city_name']
+            current_price = city_price['price'] or product['price']
+            min_price = city_price['min_price'] or 1
+            max_price = city_price['max_price']
+
+            try:
+                # Fetch competitor prices for this city
+                product_data = await parse_product_by_sku(str(external_id), session, city_id=city_id)
+
+                if not product_data:
+                    results.append(CityDempingResult(
+                        city_id=city_id,
+                        city_name=city_name,
+                        status="no_data",
+                        message="Не удалось получить данные от Kaspi"
+                    ))
+                    continue
+
+                offers = product_data.get("offers", [])
+                if not offers:
+                    results.append(CityDempingResult(
+                        city_id=city_id,
+                        city_name=city_name,
+                        status="no_offers",
+                        message="Нет предложений"
+                    ))
+                    continue
+
+                # Find competitors (excluding our own and excluded merchants)
+                min_competitor_price = None
+                our_position = None
+
+                for i, offer in enumerate(offers):
+                    offer_merchant_id = offer.get("merchantId")
+                    offer_price = offer.get("price")
+
+                    if offer_merchant_id == merchant_id:
+                        our_position = i + 1
+                    elif offer_merchant_id not in excluded_merchant_ids and offer_price is not None:
+                        if min_competitor_price is None or offer_price < min_competitor_price:
+                            min_competitor_price = offer_price
+
+                # Update our_position in DB
+                await conn.execute(
+                    """
+                    UPDATE product_city_prices
+                    SET our_position = $1, competitor_price = $2, last_check_time = NOW()
+                    WHERE product_id = $3 AND city_id = $4
+                    """,
+                    our_position,
+                    min_competitor_price,
+                    uuid.UUID(product_id),
+                    city_id
+                )
+
+                if min_competitor_price is None:
+                    results.append(CityDempingResult(
+                        city_id=city_id,
+                        city_name=city_name,
+                        status="no_competitors",
+                        message="Вы единственный продавец (или все конкуренты исключены)",
+                        our_position=our_position
+                    ))
+                    continue
+
+                # Calculate target price
+                target_price = min_competitor_price - price_step
+
+                # Apply constraints
+                if target_price < min_price:
+                    results.append(CityDempingResult(
+                        city_id=city_id,
+                        city_name=city_name,
+                        status="waiting",
+                        message=f"Конкурент ({min_competitor_price}) ниже минимума ({min_price})",
+                        competitor_price=min_competitor_price,
+                        our_position=our_position
+                    ))
+                    continue
+
+                if max_price and target_price > max_price:
+                    target_price = max_price
+
+                if target_price == current_price:
+                    results.append(CityDempingResult(
+                        city_id=city_id,
+                        city_name=city_name,
+                        status="no_change",
+                        message="Изменение не требуется",
+                        old_price=current_price,
+                        competitor_price=min_competitor_price,
+                        our_position=our_position
+                    ))
+                    continue
+
+                # Update price via Kaspi API
+                sync_result = await sync_product(
+                    product_id=str(product['id']),
+                    new_price=int(target_price),
+                    session=session
+                )
+
+                if sync_result and sync_result.get("success"):
+                    # Update city price in DB
+                    await conn.execute(
+                        """
+                        UPDATE product_city_prices
+                        SET price = $1, updated_at = NOW()
+                        WHERE product_id = $2 AND city_id = $3
+                        """,
+                        int(target_price),
+                        uuid.UUID(product_id),
+                        city_id
+                    )
+
+                    # Record price history
+                    await conn.execute(
+                        """
+                        INSERT INTO price_history (
+                            product_id, old_price, new_price, competitor_price, change_reason
+                        )
+                        VALUES ($1, $2, $3, $4, 'demper_city')
+                        """,
+                        uuid.UUID(product_id),
+                        current_price,
+                        int(target_price),
+                        int(min_competitor_price)
+                    )
+
+                    results.append(CityDempingResult(
+                        city_id=city_id,
+                        city_name=city_name,
+                        status="success",
+                        message=f"Цена обновлена: {current_price} → {target_price} ₸",
+                        old_price=current_price,
+                        new_price=int(target_price),
+                        competitor_price=min_competitor_price,
+                        our_position=our_position
+                    ))
+                    successful_updates += 1
+                else:
+                    results.append(CityDempingResult(
+                        city_id=city_id,
+                        city_name=city_name,
+                        status="sync_failed",
+                        message="Ошибка обновления в Kaspi"
+                    ))
+
+            except Exception as e:
+                logger.error(f"Error processing city {city_id}: {e}")
+                results.append(CityDempingResult(
+                    city_id=city_id,
+                    city_name=city_name,
+                    status="error",
+                    message=str(e)
+                ))
+
+        return MultiCityDempingResult(
+            product_id=product_id,
+            product_name=product['name'],
+            results=results,
+            total_cities=len(city_prices),
+            successful_updates=successful_updates
         )

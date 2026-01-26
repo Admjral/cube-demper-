@@ -80,14 +80,19 @@ class Settings(BaseSettings):
     kaspi_api_base_url: str = "https://kaspi.kz/shop/api"
     kaspi_auth_url: str = "https://idmc.shop.kaspi.kz"
 
-    # WAHA Configuration
+    # WAHA Configuration (shared container from docker-compose)
+    waha_url: str = "http://waha:3000"  # WAHA API URL inside Docker network
+    waha_api_key: Optional[str] = None  # API key for WAHA (if set in WAHA config)
+    waha_webhook_url: Optional[str] = None  # Will use {backend_url}/whatsapp/webhook if not set
+    waha_enabled: bool = True  # Enable WAHA by default for Docker deployment
+    
+    # Legacy WAHA Docker settings (kept for reference, not used with shared container)
     waha_base_image: str = "devlikeapro/waha:latest"
     waha_base_port: int = 3100
     waha_network: str = "cube-demper-network"
     waha_volume_prefix: str = "waha-user"
-    waha_enabled: bool = False  # Disable Docker-based WAHA on Railway
 
-    # Railway Integration (for WAHA services)
+    # Railway Integration (optional, for per-user WAHA containers)
     railway_api_token: Optional[str] = None
     railway_project_id: Optional[str] = None
 
