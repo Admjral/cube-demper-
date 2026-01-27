@@ -760,14 +760,24 @@ async def main():
 
 if __name__ == "__main__":
     # Configure logging for standalone mode
+    # Use simple format without shard info (filter adds it to relevant records)
     logging.basicConfig(
         level=logging.INFO,
-        format="%(asctime)s [%(levelname)s] [shard %(shard_idx)s/%(shard_cnt)s] %(name)s: %(message)s",
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         handlers=[
-            logging.FileHandler("logs/demper_worker.log", encoding="utf-8"),
             logging.StreamHandler()
         ]
     )
+
+    # Also create logs directory and file handler if possible
+    import os
+    os.makedirs("logs", exist_ok=True)
+    try:
+        file_handler = logging.FileHandler("logs/demper_worker.log", encoding="utf-8")
+        file_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(name)s: %(message)s"))
+        logging.getLogger().addHandler(file_handler)
+    except Exception:
+        pass  # Ignore if can't create log file
 
     # Run worker
     asyncio.run(main())
