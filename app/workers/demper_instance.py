@@ -733,8 +733,9 @@ class DemperWorker:
                     competitor_price,
                     change_reason
                 )
+                logger.info(f"Recorded price history: {old_price} → {new_price} (reason: {change_reason})")
         except Exception as e:
-            logger.error(f"Error recording price change: {e}", exc_info=True)
+            logger.error(f"Error recording price change for product {product_id}: {e}", exc_info=True)
 
 
 # ============================================================================
