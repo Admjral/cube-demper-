@@ -2447,3 +2447,68 @@ async def get_order_event_types() -> List[Dict[str, str]]:
         {"value": OrderEvent.ORDER_CANCELLED.value, "label": "Заказ отменён", "kaspi_state": "CANCELLED"},
         {"value": OrderEvent.REVIEW_REQUEST.value, "label": "Запрос отзыва", "kaspi_state": None},
     ]
+
+
+class OrdersPollingToggle(BaseModel):
+    enabled: bool
+
+
+class OrdersPollingStatus(BaseModel):
+    store_id: str
+    store_name: str
+    orders_polling_enabled: bool
+    last_orders_sync: Optional[datetime] = None
+
+
+@router.get("/stores/{store_id}/orders-polling", response_model=OrdersPollingStatus)
+async def get_orders_polling_status(
+    store_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Получить статус мониторинга заказов для магазина"""
+    async with pool.acquire() as conn:
+        store = await conn.fetchrow("""
+            SELECT id, name, orders_polling_enabled, last_orders_sync
+            FROM kaspi_stores
+            WHERE id = $1 AND user_id = $2
+        """, uuid.UUID(store_id), current_user['id'])
+
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+
+        return OrdersPollingStatus(
+            store_id=str(store['id']),
+            store_name=store['name'],
+            orders_polling_enabled=store['orders_polling_enabled'] or False,
+            last_orders_sync=store['last_orders_sync'],
+        )
+
+
+@router.patch("/stores/{store_id}/orders-polling", response_model=OrdersPollingStatus)
+async def toggle_orders_polling(
+    store_id: str,
+    data: OrdersPollingToggle,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Включить/выключить мониторинг заказов для магазина"""
+    async with pool.acquire() as conn:
+        store = await conn.fetchrow("""
+            UPDATE kaspi_stores
+            SET orders_polling_enabled = $1, updated_at = NOW()
+            WHERE id = $2 AND user_id = $3
+            RETURNING id, name, orders_polling_enabled, last_orders_sync
+        """, data.enabled, uuid.UUID(store_id), current_user['id'])
+
+        if not store:
+            raise HTTPException(status_code=404, detail="Store not found")
+
+        logger.info(f"Orders polling {'enabled' if data.enabled else 'disabled'} for store {store['name']}")
+
+        return OrdersPollingStatus(
+            store_id=str(store['id']),
+            store_name=store['name'],
+            orders_polling_enabled=store['orders_polling_enabled'],
+            last_orders_sync=store['last_orders_sync'],
+        )
