@@ -298,8 +298,8 @@ class DemperWorker:
                         kaspi_stores.merchant_id,
                         kaspi_stores.guid,
                         COALESCE(ds.check_interval_minutes, 15) as check_interval_minutes,
-                        COALESCE(ds.work_hours_start, '09:00') as work_hours_start,
-                        COALESCE(ds.work_hours_end, '21:00') as work_hours_end,
+                        COALESCE(ds.work_hours_start, '00:00') as work_hours_start,
+                        COALESCE(ds.work_hours_end, '23:59') as work_hours_end,
                         COALESCE(ds.price_step, 1) as store_price_step,
                         COALESCE(ds.is_enabled, true) as demping_enabled,
                         COALESCE(ds.excluded_merchant_ids, '{}') as excluded_merchant_ids
@@ -313,9 +313,10 @@ class DemperWorker:
                       AND COALESCE(kaspi_stores.needs_reauth, false) = FALSE
                       AND COALESCE(ds.is_enabled, true) = TRUE
                       -- Check if within working hours (Kazakhstan time, UTC+5)
+                      -- Default to 24/7 if not set (00:00-23:59)
                       AND (
-                          COALESCE(ds.work_hours_start, '09:00')::time <= (NOW() AT TIME ZONE 'Asia/Almaty')::time
-                          AND COALESCE(ds.work_hours_end, '21:00')::time >= (NOW() AT TIME ZONE 'Asia/Almaty')::time
+                          COALESCE(ds.work_hours_start, '00:00')::time <= (NOW() AT TIME ZONE 'Asia/Almaty')::time
+                          AND COALESCE(ds.work_hours_end, '23:59')::time >= (NOW() AT TIME ZONE 'Asia/Almaty')::time
                       )
                       -- Check if enough time passed since last check
                       AND (
