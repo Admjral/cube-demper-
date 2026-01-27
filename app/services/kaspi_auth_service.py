@@ -547,19 +547,25 @@ async def get_active_session(merchant_id: str) -> Optional[dict]:
         return None
 
 
-async def get_active_session_with_refresh(merchant_id: str, auto_refresh: bool = True) -> Optional[dict]:
+async def get_active_session_with_refresh(
+    merchant_id: str,
+    auto_refresh: bool = True,
+    skip_validation: bool = False
+) -> Optional[dict]:
     """
     Get active session for a merchant, with automatic refresh if expired.
 
     This function will:
     1. Get the session from database
-    2. Validate it
+    2. Validate it (unless skip_validation=True)
     3. If invalid and auto_refresh=True, attempt to re-authenticate using stored credentials
     4. If SMS required, mark store as needing re-auth and return None
 
     Args:
         merchant_id: Merchant ID
         auto_refresh: Whether to attempt automatic re-authentication
+        skip_validation: If True, skip HTTP validation and trust the session from DB.
+                        Useful for workers to avoid rate limiting.
 
     Returns:
         Optional[dict]: Decrypted session data or None if not found/invalid/requires SMS
@@ -600,9 +606,15 @@ async def get_active_session_with_refresh(merchant_id: str, auto_refresh: bool =
                 session_data = row['guid']
 
             # Validate session (even if decryption failed, we might still refresh)
+            # Skip validation if requested (workers use this to avoid rate limiting)
             is_valid = False
             if session_data:
-                is_valid = await validate_session(row['guid'])
+                if skip_validation:
+                    # Trust the session from DB without HTTP validation
+                    is_valid = True
+                    logger.debug(f"Skipping session validation for merchant {merchant_id}")
+                else:
+                    is_valid = await validate_session(row['guid'])
 
             if is_valid and session_data:
                 return session_data

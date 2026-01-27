@@ -16,8 +16,9 @@ import json
 import logging
 import random
 import re
+import uuid as uuid_module
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Union
 from decimal import Decimal
 
 import httpx
@@ -390,7 +391,7 @@ async def parse_product_by_sku(product_id: str, session: dict = None, city_id: O
 
 
 async def sync_product(
-    product_id: str,
+    product_id: Union[str, uuid_module.UUID],
     new_price: int,
     session: dict
 ) -> dict:
@@ -398,7 +399,7 @@ async def sync_product(
     Sync product price to Kaspi.
 
     Args:
-        product_id: Internal product UUID
+        product_id: Internal product UUID (can be string or UUID)
         new_price: New price to set
         session: Session data with cookies
 
@@ -411,6 +412,9 @@ async def sync_product(
     """
     logger.info(f"Syncing product {product_id} with price {new_price}")
 
+    # Convert product_id to UUID if it's a string
+    product_uuid = uuid_module.UUID(product_id) if isinstance(product_id, str) else product_id
+
     # Get product data from database
     pool = await get_db_pool()
     async with pool.acquire() as conn:
@@ -420,7 +424,7 @@ async def sync_product(
             FROM products
             WHERE id = $1
             """,
-            product_id
+            product_uuid
         )
 
     if not row:
@@ -479,14 +483,14 @@ async def sync_product(
                     WHERE id = $2
                     """,
                     new_price,
-                    product_id
+                    product_uuid
                 )
 
-            logger.info(f"Successfully synced product {product_id} with price {new_price}")
+            logger.info(f"Successfully synced product {product_uuid} with price {new_price}")
 
             return {
                 "success": True,
-                "product_id": product_id,
+                "product_id": str(product_uuid),
                 "new_price": new_price,
                 "response": response_data
             }

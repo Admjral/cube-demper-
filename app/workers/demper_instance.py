@@ -435,11 +435,12 @@ class DemperWorker:
                 # Small random delay to avoid synchronized bursts
                 await asyncio.sleep(random.uniform(0.01, 0.1))
 
-                # Get session for this store (with auto-refresh if expired)
-                session = await get_active_session_with_refresh(merchant_id)
+                # Get session for this store (skip validation to avoid rate limiting)
+                session = await get_active_session_with_refresh(merchant_id, skip_validation=True)
                 if not session:
-                    logger.warning(f"No active session for merchant {merchant_id}, skipping product {sku}")
+                    logger.warning(f"[{sku}] No active session for merchant {merchant_id}")
                     return False
+                logger.debug(f"[{sku}] Got session for merchant {merchant_id}")
 
                 # Fetch competitor prices
                 product_data = await parse_product_by_sku(str(external_id), session)
@@ -558,8 +559,13 @@ class DemperWorker:
                 )
 
                 if not sync_result or not sync_result.get("success"):
-                    logger.error(f"Failed to sync price for product {sku}")
+                    logger.error(f"[{sku}] Failed to sync price: {sync_result}")
                     return False
+
+                logger.info(f"[{sku}] sync_product success")
+
+                # Explicitly update price in DB (backup in case sync_product didn't)
+                await self._update_product_price(product_id, int(target_price))
 
                 # Record price change to history
                 await self._record_price_change(
@@ -668,6 +674,28 @@ class DemperWorker:
                 )
         except Exception as e:
             logger.error(f"Error updating last_check_time: {e}", exc_info=True)
+
+    async def _update_product_price(self, product_id: UUID, new_price: int):
+        """
+        Update product price in database.
+
+        This is a backup update in case sync_product didn't update the DB.
+
+        Args:
+            product_id: Product UUID
+            new_price: New price in tenge (KZT)
+        """
+        pool = await get_db_pool()
+
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute(
+                    "UPDATE products SET price = $1, updated_at = NOW() WHERE id = $2",
+                    new_price,
+                    product_id
+                )
+        except Exception as e:
+            logger.error(f"Error updating product price: {e}", exc_info=True)
 
     async def _record_price_change(
         self,
