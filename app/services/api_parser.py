@@ -28,6 +28,8 @@ from ..config import settings
 from ..core.browser_farm import get_browser_farm
 from ..core.rate_limiter import get_global_rate_limiter
 from ..core.database import get_db_pool
+from ..core.http_client import get_http_client
+from ..core.circuit_breaker import get_kaspi_circuit_breaker, CircuitOpenError
 from .kaspi_auth_service import get_active_session, validate_session, KaspiAuthError
 
 logger = logging.getLogger(__name__)
@@ -238,68 +240,74 @@ async def get_products(
     all_offers = []
     page = 0
     rate_limiter = get_global_rate_limiter()
+    client = await get_http_client()
+    breaker = get_kaspi_circuit_breaker()
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        while True:
-            url = (
-                f"https://mc.shop.kaspi.kz/bff/offer-view/list"
-                f"?m={merchant_uid}&p={page}&l={page_size}&a=true"
-            )
+    while True:
+        url = (
+            f"https://mc.shop.kaspi.kz/bff/offer-view/list"
+            f"?m={merchant_uid}&p={page}&l={page_size}&a=true"
+        )
 
-            retries = 0
-            while retries < max_retries:
-                try:
-                    # Acquire rate limit token
-                    await rate_limiter.acquire()
+        retries = 0
+        while retries < max_retries:
+            try:
+                # Acquire rate limit token
+                await rate_limiter.acquire()
 
+                # Use circuit breaker to prevent cascading failures
+                async with breaker:
                     response = await client.get(
                         url,
                         headers=headers,
                         cookies=cookies
                     )
 
-                    if response.status_code == 401:
-                        raise KaspiAuthError("Authentication failed - session expired")
+                if response.status_code == 401:
+                    raise KaspiAuthError("Authentication failed - session expired")
 
-                    if response.status_code == 429:
-                        # Rate limited - wait and retry
-                        wait_time = random.uniform(0.5, 2.0)
-                        logger.warning(f"Rate limited, waiting {wait_time:.2f}s (retry {retries + 1}/{max_retries})")
-                        await asyncio.sleep(wait_time)
-                        retries += 1
-                        continue
+                if response.status_code == 429:
+                    # Rate limited - wait and retry
+                    wait_time = random.uniform(0.5, 2.0)
+                    logger.warning(f"Rate limited, waiting {wait_time:.2f}s (retry {retries + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
+                    retries += 1
+                    continue
 
-                    response.raise_for_status()
+                response.raise_for_status()
 
-                    data = response.json()
-                    offers = data.get('data', [])
+                data = response.json()
+                offers = data.get('data', [])
 
-                    if not offers:
-                        # No more products
-                        logger.info(f"Retrieved {len(all_offers)} total products")
-                        return all_offers
+                if not offers:
+                    # No more products
+                    logger.info(f"Retrieved {len(all_offers)} total products")
+                    return all_offers
 
-                    # Map offers to internal format
-                    for offer in offers:
-                        all_offers.append(_map_offer(offer))
+                # Map offers to internal format
+                for offer in offers:
+                    all_offers.append(_map_offer(offer))
 
-                    logger.info(f"Retrieved {len(offers)} products from page {page}")
-                    page += 1
-                    break  # Success, move to next page
+                logger.info(f"Retrieved {len(offers)} products from page {page}")
+                page += 1
+                break  # Success, move to next page
 
-                except httpx.HTTPStatusError as e:
-                    if e.response.status_code == 429 and retries < max_retries:
-                        retries += 1
-                        continue
-                    logger.error(f"HTTP error fetching products: {e}")
-                    raise
-                except httpx.HTTPError as e:
-                    logger.error(f"Error fetching products: {e}")
-                    raise
+            except CircuitOpenError:
+                logger.warning("Kaspi API circuit is open, aborting product fetch")
+                return all_offers  # Return what we have so far
+            except httpx.HTTPStatusError as e:
+                if e.response.status_code == 429 and retries < max_retries:
+                    retries += 1
+                    continue
+                logger.error(f"HTTP error fetching products: {e}")
+                raise
+            except httpx.HTTPError as e:
+                logger.error(f"Error fetching products: {e}")
+                raise
 
-            if retries >= max_retries:
-                logger.error("Max retries exceeded for rate limiting")
-                raise httpx.HTTPError("Too many rate limit retries")
+        if retries >= max_retries:
+            logger.error("Max retries exceeded for rate limiting")
+            raise httpx.HTTPError("Too many rate limit retries")
 
     return all_offers
 
@@ -350,34 +358,41 @@ async def parse_product_by_sku(product_id: str, session: dict = None, city_id: O
     # Request body with city
     body = {"cityId": effective_city_id}
 
+    client = await get_http_client()
+    breaker = get_kaspi_circuit_breaker()
+
     max_retries = 3
     for attempt in range(max_retries):
         try:
-            async with httpx.AsyncClient(timeout=30.0) as client:
+            # Use circuit breaker to prevent cascading failures
+            async with breaker:
                 response = await client.post(
                     url,
                     json=body,
                     headers=headers
                 )
 
-                logger.debug(f"Response status: {response.status_code}")
+            logger.debug(f"Response status: {response.status_code}")
 
-                if response.status_code == 429:
-                    # Rate limited - wait and retry
-                    wait_time = 2 ** attempt
-                    logger.warning(f"Rate limited, waiting {wait_time}s (attempt {attempt + 1}/{max_retries})")
-                    await asyncio.sleep(wait_time)
-                    continue
+            if response.status_code == 429:
+                # Rate limited - wait and retry
+                wait_time = 2 ** attempt
+                logger.warning(f"Rate limited, waiting {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                await asyncio.sleep(wait_time)
+                continue
 
-                if response.status_code == 400:
-                    logger.warning(f"Bad request for product {product_id}: {response.text}")
-                    return None
+            if response.status_code == 400:
+                logger.warning(f"Bad request for product {product_id}: {response.text}")
+                return None
 
-                response.raise_for_status()
-                result = response.json()
-                logger.debug(f"Successfully fetched offers for product {product_id}: {len(result.get('offers', []))} offers")
-                return result
+            response.raise_for_status()
+            result = response.json()
+            logger.debug(f"Successfully fetched offers for product {product_id}: {len(result.get('offers', []))} offers")
+            return result
 
+        except CircuitOpenError:
+            logger.warning(f"Kaspi API circuit is open, skipping product {product_id}")
+            return None
         except httpx.HTTPError as e:
             if attempt < max_retries - 1:
                 wait_time = 1 + attempt
@@ -459,8 +474,12 @@ async def sync_product(
     rate_limiter = get_global_rate_limiter()
     await rate_limiter.acquire()
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        try:
+    client = await get_http_client()
+    breaker = get_kaspi_circuit_breaker()
+
+    try:
+        # Use circuit breaker to prevent cascading failures
+        async with breaker:
             response = await client.post(
                 url,
                 json=body,
@@ -468,36 +487,39 @@ async def sync_product(
                 cookies=cookies
             )
 
-            if response.status_code == 401:
-                raise KaspiAuthError("Authentication failed - session expired")
+        if response.status_code == 401:
+            raise KaspiAuthError("Authentication failed - session expired")
 
-            response.raise_for_status()
-            response_data = response.json()
+        response.raise_for_status()
+        response_data = response.json()
 
-            # Update price in database
-            async with pool.acquire() as conn:
-                await conn.execute(
-                    """
-                    UPDATE products
-                    SET price = $1, updated_at = NOW()
-                    WHERE id = $2
-                    """,
-                    new_price,
-                    product_uuid
-                )
+        # Update price in database
+        async with pool.acquire() as conn:
+            await conn.execute(
+                """
+                UPDATE products
+                SET price = $1, updated_at = NOW()
+                WHERE id = $2
+                """,
+                new_price,
+                product_uuid
+            )
 
-            logger.info(f"Successfully synced product {product_uuid} with price {new_price}")
+        logger.info(f"Successfully synced product {product_uuid} with price {new_price}")
 
-            return {
-                "success": True,
-                "product_id": str(product_uuid),
-                "new_price": new_price,
-                "response": response_data
-            }
+        return {
+            "success": True,
+            "product_id": str(product_uuid),
+            "new_price": new_price,
+            "response": response_data
+        }
 
-        except httpx.HTTPError as e:
-            logger.error(f"Error syncing product: {e}")
-            raise
+    except CircuitOpenError:
+        logger.warning(f"Kaspi API circuit is open, cannot sync product {product_uuid}")
+        return {"success": False, "error": "circuit_open", "product_id": str(product_uuid)}
+    except httpx.HTTPError as e:
+        logger.error(f"Error syncing product: {e}")
+        raise
 
 
 async def get_competitor_price(product_id: str, city_id: Optional[str] = None) -> Optional[int]:
@@ -711,44 +733,51 @@ async def fetch_orders(
     page = 0
     max_pages = 50  # Safety limit
 
+    client = await get_http_client()
+    breaker = get_kaspi_circuit_breaker()
+
     try:
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            while page < max_pages:
-                params["page[number]"] = page
+        while page < max_pages:
+            params["page[number]"] = page
 
-                response = await client.get(
-                    url,
-                    params=params,
-                    headers=headers
-                )
+            try:
+                async with breaker:
+                    response = await client.get(
+                        url,
+                        params=params,
+                        headers=headers
+                    )
+            except CircuitOpenError:
+                logger.warning(f"Kaspi API circuit is open, returning {len(all_orders)} orders fetched so far")
+                break
 
-                if response.status_code == 401:
-                    logger.warning(f"Unauthorized when fetching orders for merchant {merchant_id}")
-                    raise KaspiAuthError("Session expired")
+            if response.status_code == 401:
+                logger.warning(f"Unauthorized when fetching orders for merchant {merchant_id}")
+                raise KaspiAuthError("Session expired")
 
-                if response.status_code == 429:
-                    logger.warning("Rate limited, waiting...")
-                    await asyncio.sleep(2)
-                    continue
+            if response.status_code == 429:
+                logger.warning("Rate limited, waiting...")
+                await asyncio.sleep(2)
+                continue
 
-                response.raise_for_status()
-                data = response.json()
+            response.raise_for_status()
+            data = response.json()
 
-                orders = data.get("data", [])
-                if not orders:
-                    break
+            orders = data.get("data", [])
+            if not orders:
+                break
 
-                all_orders.extend(orders)
-                logger.debug(f"Fetched page {page}: {len(orders)} orders")
+            all_orders.extend(orders)
+            logger.debug(f"Fetched page {page}: {len(orders)} orders")
 
-                # Check if there are more pages
-                meta = data.get("meta", {})
-                total_pages = meta.get("pageCount", 1)
-                if page >= total_pages - 1:
-                    break
+            # Check if there are more pages
+            meta = data.get("meta", {})
+            total_pages = meta.get("pageCount", 1)
+            if page >= total_pages - 1:
+                break
 
-                page += 1
-                await asyncio.sleep(0.3)  # Rate limiting
+            page += 1
+            await asyncio.sleep(0.3)  # Rate limiting
 
     except httpx.HTTPError as e:
         logger.error(f"Error fetching orders: {e}")

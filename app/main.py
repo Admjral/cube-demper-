@@ -7,6 +7,7 @@ from .config import settings
 from .core.database import create_pool, close_pool
 from .core.redis import create_redis_client, close_redis_client
 from .core.logger import setup_logging
+from .core.http_client import close_http_client
 
 # Setup logging first
 setup_logging()
@@ -48,6 +49,7 @@ async def lifespan(app: FastAPI):
 
     # Shutdown
     logger.info("Shutting down application")
+    await close_http_client()
     await close_pool()
     await close_redis_client()
     logger.info("Application shutdown complete")
@@ -82,6 +84,19 @@ async def health_check():
         "status": "healthy",
         "app": settings.app_name,
         "version": settings.app_version,
+    }
+
+
+@app.get("/health/circuits")
+async def circuit_breaker_health():
+    """Circuit breaker status endpoint for monitoring"""
+    from .core.circuit_breaker import get_all_circuit_breakers
+
+    breakers = get_all_circuit_breakers()
+    return {
+        "circuits": {
+            name: cb.get_stats() for name, cb in breakers.items()
+        }
     }
 
 

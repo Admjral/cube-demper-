@@ -21,6 +21,8 @@ import httpx
 from ..core.browser_farm import BrowserFarmSharded, get_browser_farm
 from ..core.security import encrypt_session, decrypt_session
 from ..core.database import get_db_pool
+from ..core.http_client import get_http_client
+from ..core.circuit_breaker import get_kaspi_auth_circuit_breaker, CircuitOpenError
 
 logger = logging.getLogger(__name__)
 
@@ -196,55 +198,59 @@ async def _get_merchant_info(
             "Accept": "application/json, text/plain, */*",
         }
 
-        async with httpx.AsyncClient(timeout=30.0) as client:
-            # Get merchant list
-            logger.debug("Fetching merchant list")
+        client = await get_http_client()
+        breaker = get_kaspi_auth_circuit_breaker()
+
+        # Get merchant list
+        logger.debug("Fetching merchant list")
+        async with breaker:
             response = await client.get(
                 "https://mc.shop.kaspi.kz/s/m",
                 headers=headers,
                 cookies=cookies_dict
             )
-            response.raise_for_status()
-            merchants_data = response.json()
+        response.raise_for_status()
+        merchants_data = response.json()
 
-            # Extract merchant UID
-            merchants = merchants_data.get('merchants', [])
-            if not merchants or not isinstance(merchants, list):
-                raise KaspiAuthError("No merchants found in response")
+        # Extract merchant UID
+        merchants = merchants_data.get('merchants', [])
+        if not merchants or not isinstance(merchants, list):
+            raise KaspiAuthError("No merchants found in response")
 
-            merchant_uid = merchants[0]['uid']
-            logger.debug(f"Found merchant UID: {merchant_uid}")
+        merchant_uid = merchants[0]['uid']
+        logger.debug(f"Found merchant UID: {merchant_uid}")
 
-            # Get merchant details
-            payload = {
-                "operationName": "getMerchant",
-                "variables": {"id": merchant_uid},
-                "query": """
-                    query getMerchant($id: String!) {
-                        merchant(id: $id) {
-                            id
-                            name
-                            logo {
-                                url
-                            }
+        # Get merchant details
+        payload = {
+            "operationName": "getMerchant",
+            "variables": {"id": merchant_uid},
+            "query": """
+                query getMerchant($id: String!) {
+                    merchant(id: $id) {
+                        id
+                        name
+                        logo {
+                            url
                         }
                     }
-                """
-            }
+                }
+            """
+        }
 
+        async with breaker:
             response = await client.post(
                 "https://mc.shop.kaspi.kz/mc/facade/graphql?opName=getMerchant",
                 json=payload,
                 headers=headers,
                 cookies=cookies_dict
             )
-            response.raise_for_status()
-            shop_data = response.json()
+        response.raise_for_status()
+        shop_data = response.json()
 
-            shop_name = shop_data['data']['merchant']['name']
-            logger.info(f"Retrieved merchant: {shop_name} ({merchant_uid})")
+        shop_name = shop_data['data']['merchant']['name']
+        logger.info(f"Retrieved merchant: {shop_name} ({merchant_uid})")
 
-            return merchant_uid, shop_name
+        return merchant_uid, shop_name
 
     except httpx.HTTPError as e:
         logger.error(f"HTTP error getting merchant info: {e}")
@@ -463,22 +469,30 @@ async def validate_session(guid: dict) -> bool:
             "Accept": "application/json, text/plain, */*",
         }
 
-        async with httpx.AsyncClient(timeout=10.0) as client:
-            response = await client.get(
-                "https://mc.shop.kaspi.kz/s/m",
-                headers=headers,
-                cookies=cookies_dict
-            )
+        client = await get_http_client()
+        breaker = get_kaspi_auth_circuit_breaker()
 
-            if response.status_code == 200:
-                data = response.json()
-                merchants = data.get('merchants', [])
-                if merchants:
-                    logger.debug("Session is valid")
-                    return True
-
-            logger.warning(f"Session validation failed: status={response.status_code}")
+        try:
+            async with breaker:
+                response = await client.get(
+                    "https://mc.shop.kaspi.kz/s/m",
+                    headers=headers,
+                    cookies=cookies_dict,
+                    timeout=10.0  # Override default timeout for validation
+                )
+        except CircuitOpenError:
+            logger.warning("Kaspi auth circuit is open, assuming session invalid")
             return False
+
+        if response.status_code == 200:
+            data = response.json()
+            merchants = data.get('merchants', [])
+            if merchants:
+                logger.debug("Session is valid")
+                return True
+
+        logger.warning(f"Session validation failed: status={response.status_code}")
+        return False
 
     except Exception as e:
         logger.error(f"Error validating session: {e}")
