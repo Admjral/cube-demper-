@@ -13,7 +13,7 @@ class AIChatMessage(BaseModel):
 
 class AIChatRequest(BaseModel):
     """Schema for AI chat request"""
-    assistant_type: Literal["lawyer", "accountant", "salesman"]
+    assistant_type: Literal["lawyer", "salesman"]
     message: str = Field(..., min_length=1, max_length=4096)
     include_history: bool = Field(
         default=True,
@@ -50,4 +50,4 @@ class AIChatConversation(BaseModel):
 
 class ClearHistoryRequest(BaseModel):
     """Schema for clearing chat history"""
-    assistant_type: Literal["lawyer", "accountant", "salesman"]
+    assistant_type: Literal["lawyer", "salesman"]

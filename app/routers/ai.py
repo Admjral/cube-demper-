@@ -1,4 +1,4 @@
-"""AI router - OpenAI assistants (Lawyer, Accountant, Salesman)"""
+"""AI router - OpenAI assistants (Lawyer, Salesman)"""
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from typing import Annotated, List, Optional
@@ -8,6 +8,8 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
+import openai
+
 from ..schemas.ai import (
     AIChatRequest,
     AIChatResponse,
@@ -16,6 +18,7 @@ from ..schemas.ai import (
 )
 from ..core.database import get_db_pool
 from ..dependencies import get_current_user
+from ..config import settings
 from ..services.ai_salesman_service import (
     process_order_for_upsell,
     get_ai_salesman,
@@ -24,6 +27,33 @@ from ..services.ai_salesman_service import (
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+# ==================== SYSTEM PROMPTS ====================
+
+LAWYER_SYSTEM_PROMPT = """Ты - профессиональный юрист-консультант, специализирующийся на законодательстве Республики Казахстан.
+
+Твоя задача:
+- Консультировать по вопросам гражданского, трудового, налогового и предпринимательского права РК
+- Помогать с составлением и анализом договоров
+- Разъяснять права и обязанности сторон
+- Давать рекомендации по разрешению юридических споров
+- Объяснять процедуры обращения в государственные органы
+
+Важные правила:
+1. Всегда ссылайся на конкретные статьи законов РК, если это применимо
+2. Предупреждай, когда вопрос требует очной консультации с адвокатом
+3. Не давай советов по уголовным делам - рекомендуй обратиться к адвокату
+4. Отвечай на русском языке, понятным языком
+5. Если вопрос не связан с юриспруденцией, вежливо объясни что специализируешься только на правовых вопросах
+
+Актуальные законы РК которые ты знаешь:
+- Гражданский кодекс РК
+- Трудовой кодекс РК
+- Налоговый кодекс РК
+- Предпринимательский кодекс РК
+- Закон о защите прав потребителей
+- Закон о государственных закупках"""
 
 
 # ==================== SCHEMAS ====================
@@ -55,20 +85,50 @@ async def chat_with_assistant(
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """
-    Chat with AI assistant (lawyer, accountant, or salesman).
+    Chat with AI assistant (lawyer or salesman).
 
-    Note: OpenAI integration pending. For now returns placeholder.
+    Uses OpenAI GPT-4 for generating responses.
     """
-    # TODO: Implement OpenAI API integration
-    # 1. Fetch conversation history if include_history=True
-    # 2. Build messages array with system prompt based on assistant_type
-    # 3. Call OpenAI API
-    # 4. Save user message and assistant response to database
-    # 5. Return response
+    # Check if OpenAI is configured
+    if not settings.openai_api_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service not configured. Please contact support."
+        )
 
-    # Placeholder response
+    # Get system prompt based on assistant type
+    if chat_request.assistant_type == "lawyer":
+        system_prompt = LAWYER_SYSTEM_PROMPT
+    else:
+        # Salesman uses different service
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Use /ai/salesman/process-order for salesman functionality"
+        )
+
     async with pool.acquire() as conn:
-        # Save user message
+        # Build messages array
+        messages = [{"role": "system", "content": system_prompt}]
+
+        # Fetch conversation history if requested
+        if chat_request.include_history:
+            history = await conn.fetch(
+                """
+                SELECT role, content FROM ai_chat_history
+                WHERE user_id = $1 AND assistant_type = $2
+                ORDER BY created_at ASC
+                LIMIT 20
+                """,
+                current_user['id'],
+                chat_request.assistant_type
+            )
+            for msg in history:
+                messages.append({"role": msg['role'], "content": msg['content']})
+
+        # Add current user message
+        messages.append({"role": "user", "content": chat_request.message})
+
+        # Save user message to history
         await conn.execute(
             """
             INSERT INTO ai_chat_history (user_id, assistant_type, role, content)
@@ -79,10 +139,31 @@ async def chat_with_assistant(
             chat_request.message
         )
 
-        # Placeholder assistant response
-        assistant_message = f"[{chat_request.assistant_type.upper()}] OpenAI integration pending. Your message: {chat_request.message}"
+    # Call OpenAI API
+    try:
+        client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
+        response = await client.chat.completions.create(
+            model=settings.openai_model,
+            messages=messages,
+            max_tokens=settings.openai_max_tokens,
+            temperature=0.7,
+        )
+        assistant_message = response.choices[0].message.content
+    except openai.APIError as e:
+        logger.error(f"OpenAI API error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="AI service temporarily unavailable. Please try again later."
+        )
+    except Exception as e:
+        logger.error(f"Error calling OpenAI: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to generate response"
+        )
 
-        # Save assistant response
+    # Save assistant response to history
+    async with pool.acquire() as conn:
         await conn.execute(
             """
             INSERT INTO ai_chat_history (user_id, assistant_type, role, content)
@@ -108,10 +189,10 @@ async def get_conversation_history(
     limit: int = 50
 ):
     """Get conversation history with specific assistant"""
-    if assistant_type not in ['lawyer', 'accountant', 'salesman']:
+    if assistant_type not in ['lawyer', 'salesman']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid assistant type. Must be: lawyer, accountant, or salesman"
+            detail="Invalid assistant type. Must be: lawyer or salesman"
         )
 
     async with pool.acquire() as conn:
