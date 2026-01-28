@@ -97,10 +97,10 @@ class Settings(BaseSettings):
     railway_api_token: Optional[str] = None
     railway_project_id: Optional[str] = None
 
-    # OpenAI
-    openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-4-turbo-preview"
-    openai_max_tokens: int = 2000
+    # Google Gemini
+    gemini_api_key: Optional[str] = None
+    gemini_model: str = "gemini-1.5-flash"  # Fast and cheap, use "gemini-1.5-pro" for complex tasks
+    gemini_max_tokens: int = 2000
 
     # TipTopPay (Billing)
     tiptoppay_public_id: Optional[str] = None

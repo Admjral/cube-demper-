@@ -1,4 +1,4 @@
-"""AI router - OpenAI assistants (Lawyer, Salesman)"""
+"""AI router - Gemini assistants (Lawyer, Salesman)"""
 
 from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
 from typing import Annotated, List, Optional
@@ -8,7 +8,7 @@ import logging
 from datetime import datetime
 from uuid import UUID
 
-import openai
+import google.generativeai as genai
 
 from ..schemas.ai import (
     AIChatRequest,
@@ -87,10 +87,10 @@ async def chat_with_assistant(
     """
     Chat with AI assistant (lawyer or salesman).
 
-    Uses OpenAI GPT-4 for generating responses.
+    Uses Google Gemini for generating responses.
     """
-    # Check if OpenAI is configured
-    if not settings.openai_api_key:
+    # Check if Gemini is configured
+    if not settings.gemini_api_key:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI service not configured. Please contact support."
@@ -139,27 +139,35 @@ async def chat_with_assistant(
             chat_request.message
         )
 
-    # Call OpenAI API
+    # Call Gemini API
     try:
-        client = openai.AsyncOpenAI(api_key=settings.openai_api_key)
-        response = await client.chat.completions.create(
-            model=settings.openai_model,
-            messages=messages,
-            max_tokens=settings.openai_max_tokens,
-            temperature=0.7,
+        genai.configure(api_key=settings.gemini_api_key)
+        model = genai.GenerativeModel(
+            model_name=settings.gemini_model,
+            system_instruction=system_prompt
         )
-        assistant_message = response.choices[0].message.content
-    except openai.APIError as e:
-        logger.error(f"OpenAI API error: {e}")
+
+        # Build chat history for Gemini format
+        chat_history = []
+        for msg in messages[1:]:  # Skip system message (already in system_instruction)
+            role = "user" if msg["role"] == "user" else "model"
+            chat_history.append({"role": role, "parts": [msg["content"]]})
+
+        # Start chat and get response
+        chat = model.start_chat(history=chat_history[:-1] if len(chat_history) > 1 else [])
+        response = await chat.send_message_async(
+            chat_request.message,
+            generation_config=genai.GenerationConfig(
+                max_output_tokens=settings.gemini_max_tokens,
+                temperature=0.7,
+            )
+        )
+        assistant_message = response.text
+    except Exception as e:
+        logger.error(f"Gemini API error: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="AI service temporarily unavailable. Please try again later."
-        )
-    except Exception as e:
-        logger.error(f"Error calling OpenAI: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to generate response"
         )
 
     # Save assistant response to history
