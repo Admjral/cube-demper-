@@ -8,7 +8,7 @@ class AIChatHistory:
     """AI Chat History model - stores conversation history with AI assistants"""
     id: uuid.UUID
     user_id: uuid.UUID
-    assistant_type: str  # 'lawyer', 'accountant', 'salesman'
+    assistant_type: str  # 'lawyer', 'salesman'
     role: str  # 'user' or 'assistant'
     content: str
     created_at: datetime
