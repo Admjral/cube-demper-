@@ -1,5 +1,5 @@
 import redis.asyncio as redis
-from typing import Optional
+from typing import Optional, List
 import logging
 
 from ..config import settings
@@ -104,3 +104,59 @@ class RedisKeyspace:
     @staticmethod
     def waha_container_status(user_id: str) -> str:
         return f"waha:container:{user_id}"
+
+    # User activity tracking
+    USER_ACTIVITY_PREFIX = "user:activity:"
+    USER_ACTIVITY = "user:activity:{user_id}"
+
+    @staticmethod
+    def user_activity(user_id: str) -> str:
+        return f"user:activity:{user_id}"
+
+
+async def set_user_activity(user_id: str, timestamp: Optional[float] = None) -> None:
+    """Set user activity timestamp in Redis"""
+    try:
+        redis_client = await get_redis()
+        key = RedisKeyspace.user_activity(user_id)
+        if timestamp is None:
+            import time
+            timestamp = time.time()
+        # Set with expiration of 10 minutes (600 seconds)
+        await redis_client.setex(key, 600, str(timestamp))
+    except Exception as e:
+        logger.error(f"Failed to set user activity: {e}")
+
+
+async def get_online_users(threshold_minutes: int = 5) -> List[str]:
+    """Get list of online user IDs (active within threshold_minutes)"""
+    try:
+        redis_client = await get_redis()
+        import time
+        current_time = time.time()
+        threshold_seconds = threshold_minutes * 60
+        
+        # Get all user activity keys
+        pattern = RedisKeyspace.USER_ACTIVITY_PREFIX + "*"
+        keys = []
+        async for key in redis_client.scan_iter(match=pattern):
+            keys.append(key)
+        
+        online_users = []
+        for key in keys:
+            try:
+                timestamp_str = await redis_client.get(key)
+                if timestamp_str:
+                    timestamp = float(timestamp_str)
+                    if current_time - timestamp <= threshold_seconds:
+                        # Extract user_id from key (user:activity:{user_id})
+                        user_id = key.replace(RedisKeyspace.USER_ACTIVITY_PREFIX, "")
+                        online_users.append(user_id)
+            except (ValueError, TypeError) as e:
+                logger.warning(f"Invalid timestamp in key {key}: {e}")
+                continue
+        
+        return online_users
+    except Exception as e:
+        logger.error(f"Failed to get online users: {e}")
+        return []

@@ -4,14 +4,26 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Annotated
 import asyncpg
 import uuid
+from datetime import datetime, timedelta
 
 from ..schemas.admin import (
     UserListResponse,
     UserAdminResponse,
     SystemStats,
     UpdateUserRoleRequest,
+    BlockUserRequest,
+    ExtendSubscriptionRequest,
+    PartnerResponse,
+    PartnerCreateRequest,
+    PartnerListResponse,
+    PartnerStatsResponse,
+    StoreAdminResponse,
+    StoreListResponse,
+    UserDetailsResponse,
 )
 from ..core.database import get_db_pool
+from ..core.redis import get_redis, get_online_users
+from ..core.security import get_password_hash
 from ..dependencies import get_current_admin_user
 
 router = APIRouter()
@@ -31,13 +43,16 @@ async def list_users(
         # Get total count
         total = await conn.fetchval("SELECT COUNT(*) FROM users")
 
-        # Get users with subscription info, store counts, and product counts
+        # Get users with subscription info, store counts, product counts, and partner info
         users = await conn.fetch(
             """
             SELECT
-                u.id, u.email, u.full_name, u.role, u.created_at, u.updated_at,
+                u.id, u.email, u.full_name, u.role, u.is_blocked, u.partner_id,
+                u.created_at, u.updated_at,
                 s.plan as subscription_plan,
                 s.status as subscription_status,
+                s.current_period_end as subscription_end_date,
+                p.full_name as partner_name,
                 (
                     SELECT COUNT(DISTINCT k.id)
                     FROM kaspi_stores k
@@ -45,12 +60,13 @@ async def list_users(
                 ) as stores_count,
                 (
                     SELECT COUNT(*)
-                    FROM products p
-                    JOIN kaspi_stores k ON k.id = p.store_id
+                    FROM products pr
+                    JOIN kaspi_stores k ON k.id = pr.store_id
                     WHERE k.user_id = u.id
                 ) as products_count
             FROM users u
-            LEFT JOIN subscriptions s ON s.user_id = u.id
+            LEFT JOIN subscriptions s ON s.user_id = u.id AND s.status = 'active'
+            LEFT JOIN partners p ON p.id = u.partner_id
             ORDER BY u.created_at DESC
             LIMIT $1 OFFSET $2
             """,
@@ -64,10 +80,14 @@ async def list_users(
                 email=u['email'],
                 full_name=u['full_name'],
                 role=u['role'],
+                is_blocked=u.get('is_blocked', False),
+                partner_id=str(u['partner_id']) if u.get('partner_id') else None,
+                partner_name=u.get('partner_name'),
                 created_at=u['created_at'],
                 updated_at=u['updated_at'],
                 subscription_plan=u['subscription_plan'],
                 subscription_status=u['subscription_status'],
+                subscription_end_date=u.get('subscription_end_date'),
                 stores_count=u['stores_count'],
                 products_count=u['products_count']
             )
@@ -89,16 +109,28 @@ async def get_system_stats(
 ):
     """Get system statistics (admin only)"""
     async with pool.acquire() as conn:
+        # Get current month start
+        now = datetime.now()
+        month_start = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+        
         stats = await conn.fetchrow(
             """
             SELECT
                 (SELECT COUNT(*) FROM users) as total_users,
+                (SELECT COUNT(*) FROM users WHERE is_blocked = true) as blocked_users,
                 (SELECT COUNT(*) FROM subscriptions WHERE status = 'active') as active_subscriptions,
                 (SELECT COUNT(*) FROM products) as total_products,
                 (SELECT COUNT(*) FROM products WHERE bot_active = true) as active_demping_products,
-                (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'completed') as total_revenue_tiyns
-            """
+                (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'completed') as total_revenue_tiyns,
+                (SELECT COALESCE(SUM(amount), 0) FROM payments WHERE status = 'completed' AND created_at >= $1) as monthly_revenue,
+                (SELECT COUNT(*) FROM kaspi_stores WHERE created_at >= $1) as new_connections
+            """,
+            month_start
         )
+
+        # Get online users count
+        online_user_ids = await get_online_users(threshold_minutes=5)
+        online_users_count = len(online_user_ids)
 
         # TODO: Add demper workers status monitoring
         demper_workers_status = {
@@ -110,9 +142,13 @@ async def get_system_stats(
         return SystemStats(
             total_users=stats['total_users'],
             active_subscriptions=stats['active_subscriptions'],
+            blocked_users=stats['blocked_users'],
+            online_users=online_users_count,
             total_products=stats['total_products'],
             active_demping_products=stats['active_demping_products'],
             total_revenue_tiyns=stats['total_revenue_tiyns'],
+            monthly_revenue=stats['monthly_revenue'],
+            new_connections=stats['new_connections'],
             demper_workers_status=demper_workers_status
         )
 
@@ -166,3 +202,368 @@ async def delete_user(
             )
 
     return None
+
+
+@router.post("/users/{user_id}/block", status_code=status.HTTP_200_OK)
+async def block_user(
+    user_id: str,
+    request: BlockUserRequest,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Block user (admin only)"""
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET is_blocked = true WHERE id = $1",
+            uuid.UUID(user_id)
+        )
+
+        if result == "UPDATE 0":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+    return {"status": "success", "message": "User blocked successfully"}
+
+
+@router.post("/users/{user_id}/unblock", status_code=status.HTTP_200_OK)
+async def unblock_user(
+    user_id: str,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Unblock user (admin only)"""
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE users SET is_blocked = false WHERE id = $1",
+            uuid.UUID(user_id)
+        )
+
+        if result == "UPDATE 0":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+    return {"status": "success", "message": "User unblocked successfully"}
+
+
+@router.post("/subscriptions/{subscription_id}/extend", status_code=status.HTTP_200_OK)
+async def extend_subscription(
+    subscription_id: str,
+    request: ExtendSubscriptionRequest,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Extend subscription period (admin only)"""
+    async with pool.acquire() as conn:
+        # Get current subscription
+        subscription = await conn.fetchrow(
+            "SELECT id, current_period_end FROM subscriptions WHERE id = $1",
+            uuid.UUID(subscription_id)
+        )
+
+        if not subscription:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Subscription not found"
+            )
+
+        # Calculate new end date
+        current_end = subscription['current_period_end']
+        if isinstance(current_end, str):
+            current_end = datetime.fromisoformat(current_end.replace('Z', '+00:00'))
+        new_end = current_end + timedelta(days=request.days)
+
+        # Update subscription
+        await conn.execute(
+            "UPDATE subscriptions SET current_period_end = $1, updated_at = NOW() WHERE id = $2",
+            new_end,
+            uuid.UUID(subscription_id)
+        )
+
+    return {"status": "success", "message": f"Subscription extended by {request.days} days"}
+
+
+@router.get("/users/{user_id}/details", response_model=UserDetailsResponse)
+async def get_user_details(
+    user_id: str,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get detailed user information (admin only)"""
+    async with pool.acquire() as conn:
+        # Get user info
+        user = await conn.fetchrow(
+            """
+            SELECT u.*, p.full_name as partner_name
+            FROM users u
+            LEFT JOIN partners p ON p.id = u.partner_id
+            WHERE u.id = $1
+            """,
+            uuid.UUID(user_id)
+        )
+
+        if not user:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="User not found"
+            )
+
+        # Get subscription
+        subscription = await conn.fetchrow(
+            """
+            SELECT id, plan, status, products_limit, current_period_start, current_period_end,
+                   created_at, updated_at
+            FROM subscriptions
+            WHERE user_id = $1 AND status = 'active'
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            uuid.UUID(user_id)
+        )
+
+        # Get stores
+        stores = await conn.fetch(
+            """
+            SELECT id, merchant_id, name, products_count, is_active, last_sync, created_at
+            FROM kaspi_stores
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            """,
+            uuid.UUID(user_id)
+        )
+
+        # Get payments
+        payments = await conn.fetch(
+            """
+            SELECT id, amount, status, plan, created_at
+            FROM payments
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT 10
+            """,
+            uuid.UUID(user_id)
+        )
+
+        return UserDetailsResponse(
+            id=str(user['id']),
+            email=user['email'],
+            full_name=user['full_name'],
+            role=user['role'],
+            is_blocked=user.get('is_blocked', False),
+            partner_id=str(user['partner_id']) if user.get('partner_id') else None,
+            partner_name=user.get('partner_name'),
+            created_at=user['created_at'],
+            updated_at=user['updated_at'],
+            subscription=dict(subscription) if subscription else None,
+            stores=[dict(s) for s in stores],
+            payments=[dict(p) for p in payments]
+        )
+
+
+@router.get("/partners", response_model=PartnerListResponse)
+async def list_partners(
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """List all partners (admin only)"""
+    async with pool.acquire() as conn:
+        partners = await conn.fetch(
+            """
+            SELECT p.*,
+                   (SELECT COUNT(*) FROM users WHERE partner_id = p.id) as referred_users_count
+            FROM partners p
+            ORDER BY p.created_at DESC
+            """
+        )
+
+        partner_responses = [
+            PartnerResponse(
+                id=str(p['id']),
+                email=p['email'],
+                full_name=p['full_name'],
+                created_at=p['created_at'],
+                updated_at=p['updated_at'],
+                referred_users_count=p['referred_users_count']
+            )
+            for p in partners
+        ]
+
+        return PartnerListResponse(
+            partners=partner_responses,
+            total=len(partner_responses)
+        )
+
+
+@router.post("/partners", response_model=PartnerResponse, status_code=status.HTTP_201_CREATED)
+async def create_partner(
+    partner_data: PartnerCreateRequest,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Create new partner (admin only)"""
+    async with pool.acquire() as conn:
+        # Check if partner already exists
+        existing = await conn.fetchrow(
+            "SELECT id FROM partners WHERE email = $1",
+            partner_data.email
+        )
+
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Partner with this email already exists"
+            )
+
+        # Hash password
+        password_hash = get_password_hash(partner_data.password)
+
+        # Create partner
+        partner = await conn.fetchrow(
+            """
+            INSERT INTO partners (email, password_hash, full_name)
+            VALUES ($1, $2, $3)
+            RETURNING id, email, full_name, created_at, updated_at
+            """,
+            partner_data.email,
+            password_hash,
+            partner_data.full_name
+        )
+
+        return PartnerResponse(
+            id=str(partner['id']),
+            email=partner['email'],
+            full_name=partner['full_name'],
+            created_at=partner['created_at'],
+            updated_at=partner['updated_at'],
+            referred_users_count=0
+        )
+
+
+@router.get("/partners/{partner_id}/stats", response_model=PartnerStatsResponse)
+async def get_partner_stats(
+    partner_id: str,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get partner statistics (admin only)"""
+    async with pool.acquire() as conn:
+        # Get partner info
+        partner = await conn.fetchrow(
+            "SELECT id, email FROM partners WHERE id = $1",
+            uuid.UUID(partner_id)
+        )
+
+        if not partner:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Partner not found"
+            )
+
+        # Get statistics
+        stats = await conn.fetchrow(
+            """
+            SELECT
+                (SELECT COUNT(*) FROM users WHERE partner_id = $1) as referred_users_count,
+                (SELECT COUNT(*) FROM users u
+                 JOIN subscriptions s ON s.user_id = u.id
+                 WHERE u.partner_id = $1 AND s.status = 'active') as active_subscriptions_count,
+                (SELECT COALESCE(SUM(p.amount), 0) FROM payments p
+                 JOIN users u ON u.id = p.user_id
+                 WHERE u.partner_id = $1 AND p.status = 'completed') as total_revenue_tiyns
+            """,
+            uuid.UUID(partner_id)
+        )
+
+        return PartnerStatsResponse(
+            partner_id=str(partner['id']),
+            partner_email=partner['email'],
+            referred_users_count=stats['referred_users_count'],
+            active_subscriptions_count=stats['active_subscriptions_count'],
+            total_revenue_tiyns=stats['total_revenue_tiyns']
+        )
+
+
+@router.delete("/partners/{partner_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_partner(
+    partner_id: str,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Delete partner (admin only)"""
+    async with pool.acquire() as conn:
+        # Remove partner_id from users first (set to NULL)
+        await conn.execute(
+            "UPDATE users SET partner_id = NULL WHERE partner_id = $1",
+            uuid.UUID(partner_id)
+        )
+
+        # Delete partner
+        result = await conn.execute(
+            "DELETE FROM partners WHERE id = $1",
+            uuid.UUID(partner_id)
+        )
+
+        if result == "DELETE 0":
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail="Partner not found"
+            )
+
+    return None
+
+
+@router.get("/stores", response_model=StoreListResponse)
+async def list_stores(
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    page: int = 1,
+    page_size: int = 50
+):
+    """List all stores with user information (admin only)"""
+    offset = (page - 1) * page_size
+
+    async with pool.acquire() as conn:
+        # Get total count
+        total = await conn.fetchval("SELECT COUNT(*) FROM kaspi_stores")
+
+        # Get stores with user info
+        stores = await conn.fetch(
+            """
+            SELECT
+                k.id, k.user_id, k.merchant_id, k.name, k.products_count,
+                k.is_active, k.last_sync, k.created_at,
+                u.email as user_email, u.full_name as user_name
+            FROM kaspi_stores k
+            JOIN users u ON u.id = k.user_id
+            ORDER BY k.created_at DESC
+            LIMIT $1 OFFSET $2
+            """,
+            page_size,
+            offset
+        )
+
+        store_responses = [
+            StoreAdminResponse(
+                id=str(s['id']),
+                user_id=str(s['user_id']),
+                user_email=s['user_email'],
+                user_name=s['user_name'],
+                merchant_id=s['merchant_id'],
+                name=s['name'],
+                products_count=s['products_count'],
+                is_active=s['is_active'],
+                last_sync=s['last_sync'],
+                created_at=s['created_at']
+            )
+            for s in stores
+        ]
+
+        return StoreListResponse(
+            stores=store_responses,
+            total=total,
+            page=page,
+            page_size=page_size
+        )

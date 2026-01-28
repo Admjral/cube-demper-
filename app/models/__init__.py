@@ -9,6 +9,7 @@ from .whatsapp import WhatsAppSession, WhatsAppTemplate
 from .ai_chat import AIChatHistory
 from .subscription import Subscription
 from .payment import Payment
+from .partner import Partner
 
 __all__ = [
     "User",
@@ -21,4 +22,5 @@ __all__ = [
     "AIChatHistory",
     "Subscription",
     "Payment",
+    "Partner",
 ]
