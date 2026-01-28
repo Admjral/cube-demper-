@@ -89,7 +89,7 @@ async def login(
     """Login user and return JWT token"""
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
-            "SELECT id, email, password_hash, role FROM users WHERE email = $1",
+            "SELECT id, email, password_hash, role, is_blocked FROM users WHERE email = $1",
             credentials.email
         )
 
@@ -99,6 +99,13 @@ async def login(
         # Verify password
         if not verify_password(credentials.password, user['password_hash']):
             raise AuthenticationError("Invalid email or password")
+
+        # Check if user is blocked
+        if user.get('is_blocked', False):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Your account has been blocked. Please contact support."
+            )
 
         # Create access token
         access_token = create_access_token(
