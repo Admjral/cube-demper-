@@ -1,3 +1,4 @@
+import asyncio
 import asyncpg
 from typing import Optional
 import logging
@@ -18,21 +19,27 @@ async def create_pool() -> asyncpg.Pool:
         return _pool
 
     try:
-        _pool = await asyncpg.create_pool(
-            host=settings.postgres_host,
-            port=settings.postgres_port,
-            database=settings.postgres_db,
-            user=settings.postgres_user,
-            password=settings.postgres_password,
-            min_size=settings.db_pool_min_size,
-            max_size=settings.db_pool_max_size,
-            command_timeout=60,
+        _pool = await asyncio.wait_for(
+            asyncpg.create_pool(
+                host=settings.postgres_host,
+                port=settings.postgres_port,
+                database=settings.postgres_db,
+                user=settings.postgres_user,
+                password=settings.postgres_password,
+                min_size=settings.db_pool_min_size,
+                max_size=settings.db_pool_max_size,
+                command_timeout=60,
+            ),
+            timeout=30.0  # 30 second timeout for pool creation
         )
         logger.info(
             f"Database pool created: {settings.postgres_host}:{settings.postgres_port}/{settings.postgres_db} "
             f"(min={settings.db_pool_min_size}, max={settings.db_pool_max_size})"
         )
         return _pool
+    except asyncio.TimeoutError:
+        logger.error("Database pool creation timed out after 30 seconds")
+        raise
     except Exception as e:
         logger.error(f"Failed to create database pool: {e}")
         raise

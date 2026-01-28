@@ -29,7 +29,7 @@ class Settings(BaseSettings):
     postgres_db: str = "cube_demper"
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
-    db_pool_min_size: Optional[int] = 10
+    db_pool_min_size: Optional[int] = 2  # Reduced for faster startup
     db_pool_max_size: Optional[int] = 50
 
     @property
