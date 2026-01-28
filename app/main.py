@@ -2,6 +2,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 import logging
+import time
+import asyncio
 
 from .config import settings
 from .core.database import create_pool, close_pool
@@ -14,45 +16,66 @@ setup_logging()
 logger = logging.getLogger(__name__)
 
 
+def log_step(step_name: str, start_time: float) -> float:
+    """Log step completion with timing"""
+    elapsed = time.time() - start_time
+    logger.info(f"[STARTUP] {step_name} completed in {elapsed:.2f}s")
+    return time.time()
+
+
+async def verify_playwright_background():
+    """Verify Playwright in background (non-blocking)"""
+    try:
+        from playwright.async_api import async_playwright
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=True)
+            await browser.close()
+        logger.info("[STARTUP] ✅ Playwright chromium verified (background)")
+    except Exception as e:
+        logger.warning(f"[STARTUP] ⚠️ Playwright verification failed: {e}")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Lifecycle manager for FastAPI app"""
+    total_start = time.time()
+
     # Startup
-    logger.info(f"Starting {settings.app_name} v{settings.app_version} on Railway")
+    logger.info(f"[STARTUP] Starting {settings.app_name} v{settings.app_version}")
+    logger.info(f"[STARTUP] Environment: Railway, Debug: {settings.debug}")
 
     try:
+        step_start = time.time()
+
         # Initialize database pool
+        logger.info("[STARTUP] Connecting to database...")
         await create_pool()
-        logger.info("Database pool initialized")
+        step_start = log_step("Database pool", step_start)
 
         # Initialize Redis client
+        logger.info("[STARTUP] Connecting to Redis...")
         await create_redis_client()
-        logger.info("Redis client initialized")
+        step_start = log_step("Redis client", step_start)
 
-        # Verify Playwright installation
-        try:
-            from playwright.async_api import async_playwright
-            async with async_playwright() as p:
-                browser = await p.chromium.launch(headless=True)
-                await browser.close()
-            logger.info("✅ Playwright chromium verified")
-        except Exception as e:
-            logger.error(f"❌ Playwright verification failed: {e}")
-            # Don't crash the app, just log the error
-            # Kaspi auth will fail gracefully with proper error message
+        # Start Playwright verification in background (don't block startup)
+        logger.info("[STARTUP] Starting Playwright verification in background...")
+        asyncio.create_task(verify_playwright_background())
+
+        total_elapsed = time.time() - total_start
+        logger.info(f"[STARTUP] ✅ Application ready in {total_elapsed:.2f}s")
 
     except Exception as e:
-        logger.error(f"Failed to initialize application: {e}")
+        logger.error(f"[STARTUP] ❌ Failed to initialize: {e}")
         raise
 
     yield
 
     # Shutdown
-    logger.info("Shutting down application")
+    logger.info("[SHUTDOWN] Shutting down application...")
     await close_http_client()
     await close_pool()
     await close_redis_client()
-    logger.info("Application shutdown complete")
+    logger.info("[SHUTDOWN] Application shutdown complete")
 
 
 # Create FastAPI app
