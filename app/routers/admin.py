@@ -160,10 +160,10 @@ async def update_user_role(
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """Update user role (admin only)"""
-    if role_update.role not in ['user', 'admin']:
+    if role_update.role not in ['user', 'admin', 'support']:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Role must be 'user' or 'admin'"
+            detail="Role must be 'user', 'admin', or 'support'"
         )
 
     async with pool.acquire() as conn:
@@ -513,6 +513,97 @@ async def delete_partner(
             )
 
     return None
+
+
+@router.get("/support-staff")
+async def list_support_staff(
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """List all support staff (admin only)"""
+    async with pool.acquire() as conn:
+        staff = await conn.fetch(
+            """
+            SELECT id, email, full_name, created_at, updated_at
+            FROM users
+            WHERE role = 'support'
+            ORDER BY created_at DESC
+            """
+        )
+
+        return {
+            "staff": [
+                {
+                    "id": str(s['id']),
+                    "email": s['email'],
+                    "full_name": s['full_name'],
+                    "created_at": s['created_at'].isoformat() if s['created_at'] else None,
+                    "updated_at": s['updated_at'].isoformat() if s['updated_at'] else None,
+                }
+                for s in staff
+            ],
+            "total": len(staff)
+        }
+
+
+@router.post("/support-staff", status_code=status.HTTP_201_CREATED)
+async def create_support_staff(
+    request: dict,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Create a new support staff account (admin only)"""
+    email = request.get("email")
+    password = request.get("password")
+    full_name = request.get("full_name", "Support Staff")
+
+    if not email or not password:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email and password are required"
+        )
+
+    if len(password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 6 characters"
+        )
+
+    async with pool.acquire() as conn:
+        # Check if user already exists
+        existing = await conn.fetchrow(
+            "SELECT id FROM users WHERE email = $1",
+            email
+        )
+
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="User with this email already exists"
+            )
+
+        # Hash password
+        password_hash = get_password_hash(password)
+
+        # Create support user
+        user = await conn.fetchrow(
+            """
+            INSERT INTO users (email, password_hash, full_name, role)
+            VALUES ($1, $2, $3, 'support')
+            RETURNING id, email, full_name, role, created_at
+            """,
+            email,
+            password_hash,
+            full_name
+        )
+
+        return {
+            "id": str(user['id']),
+            "email": user['email'],
+            "full_name": user['full_name'],
+            "role": user['role'],
+            "created_at": user['created_at'].isoformat() if user['created_at'] else None
+        }
 
 
 @router.get("/stores", response_model=StoreListResponse)

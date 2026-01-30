@@ -20,8 +20,9 @@ import uuid as uuid_module
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Union
 from decimal import Decimal
+from uuid import UUID
 
-import httpx
+import httpx  # pyright: ignore[reportMissingImports]
 from playwright.async_api import TimeoutError as PlaywrightTimeoutError
 
 from ..config import settings
@@ -30,6 +31,7 @@ from ..core.rate_limiter import get_global_rate_limiter
 from ..core.database import get_db_pool
 from ..core.http_client import get_http_client
 from ..core.circuit_breaker import get_kaspi_circuit_breaker, CircuitOpenError
+from ..core.proxy_rotator import get_user_proxy_rotator, NoProxiesAllocatedError, NoProxiesAvailableError
 from .kaspi_auth_service import get_active_session, validate_session, KaspiAuthError
 
 logger = logging.getLogger(__name__)
@@ -212,7 +214,9 @@ async def get_products(
     merchant_id: str,
     session: dict,
     page_size: int = 100,
-    max_retries: int = 3
+    max_retries: int = 3,
+    user_id: Optional[UUID] = None,
+    use_proxy: bool = False
 ) -> List[dict]:
     """
     Fetch all products for a merchant using pagination.
@@ -222,6 +226,8 @@ async def get_products(
         session: Session data with cookies
         page_size: Products per page (max 100)
         max_retries: Maximum retry attempts on rate limit
+        user_id: User UUID (required if use_proxy=True)
+        use_proxy: Whether to use user's proxy pool (module='catalog')
 
     Returns:
         List of products in internal format
@@ -240,7 +246,32 @@ async def get_products(
     all_offers = []
     page = 0
     rate_limiter = get_global_rate_limiter()
-    client = await get_http_client()
+
+    # Get proxy rotator if using proxies
+    rotator = None
+    proxy_url = None
+    if use_proxy:
+        if not user_id:
+            raise ValueError("user_id required when use_proxy=True")
+
+        try:
+            rotator = await get_user_proxy_rotator(user_id, module='catalog')
+            proxy = await rotator.get_current_proxy()
+            proxy_url = f"{proxy.protocol}://{proxy.username}:{proxy.password}@{proxy.host}:{proxy.port}"
+            logger.debug(f"Using proxy {proxy.id} for catalog sync (merchant {merchant_id})")
+        except (NoProxiesAllocatedError, NoProxiesAvailableError) as e:
+            logger.warning(f"No proxies available for user {user_id}, module 'catalog': {e}")
+            use_proxy = False
+
+    # Create HTTP client with or without proxy
+    if use_proxy and proxy_url:
+        client = httpx.AsyncClient(
+            proxies={"http://": proxy_url, "https://": proxy_url},
+            timeout=httpx.Timeout(30.0),
+        )
+    else:
+        client = await get_http_client()
+
     breaker = get_kaspi_circuit_breaker()
 
     while True:
@@ -252,8 +283,9 @@ async def get_products(
         retries = 0
         while retries < max_retries:
             try:
-                # Acquire rate limit token
-                await rate_limiter.acquire()
+                # Acquire rate limit token (skip if using proxy)
+                if not use_proxy:
+                    await rate_limiter.acquire()
 
                 # Use circuit breaker to prevent cascading failures
                 async with breaker:
@@ -264,10 +296,14 @@ async def get_products(
                     )
 
                 if response.status_code == 401:
+                    if rotator:
+                        await rotator.record_request(success=False)
                     raise KaspiAuthError("Authentication failed - session expired")
 
                 if response.status_code == 429:
                     # Rate limited - wait and retry
+                    if rotator:
+                        await rotator.record_request(success=False)
                     wait_time = random.uniform(0.5, 2.0)
                     logger.warning(f"Rate limited, waiting {wait_time:.2f}s (retry {retries + 1}/{max_retries})")
                     await asyncio.sleep(wait_time)
@@ -279,9 +315,15 @@ async def get_products(
                 data = response.json()
                 offers = data.get('data', [])
 
+                # ✅ Record successful request with proxy
+                if rotator:
+                    await rotator.record_request(success=True)
+
                 if not offers:
                     # No more products
                     logger.info(f"Retrieved {len(all_offers)} total products")
+                    if use_proxy and proxy_url:
+                        await client.aclose()
                     return all_offers
 
                 # Map offers to internal format
@@ -294,20 +336,34 @@ async def get_products(
 
             except CircuitOpenError:
                 logger.warning("Kaspi API circuit is open, aborting product fetch")
+                if rotator:
+                    await rotator.record_request(success=False)
+                if use_proxy and proxy_url:
+                    await client.aclose()
                 return all_offers  # Return what we have so far
             except httpx.HTTPStatusError as e:
+                if rotator:
+                    await rotator.record_request(success=False)
                 if e.response.status_code == 429 and retries < max_retries:
                     retries += 1
                     continue
                 logger.error(f"HTTP error fetching products: {e}")
                 raise
             except httpx.HTTPError as e:
+                if rotator:
+                    await rotator.record_request(success=False)
                 logger.error(f"Error fetching products: {e}")
                 raise
 
         if retries >= max_retries:
             logger.error("Max retries exceeded for rate limiting")
+            if use_proxy and proxy_url:
+                await client.aclose()
             raise httpx.HTTPError("Too many rate limit retries")
+
+    # Cleanup client if needed
+    if use_proxy and proxy_url:
+        await client.aclose()
 
     return all_offers
 

@@ -102,6 +102,18 @@ class Settings(BaseSettings):
     gemini_model: str = "gemini-1.5-flash"  # Fast and cheap, use "gemini-1.5-pro" for complex tasks
     gemini_max_tokens: int = 2000
 
+    # Google Gemini
+    gemini_api_key: Optional[str] = "AIzaSyAxEVz3TbqhvjpIXNgcaMBa8RJFWrShVO0"
+    gemini_model: str = "gemini-2.5-flash"  # Fast and cheap for general tasks
+    gemini_lawyer_model: str = "gemini-2.5-flash"  # Model for AI Lawyer
+    gemini_max_tokens: int = 4000
+    gemini_embedding_model: str = "text-embedding-004"  # For RAG embeddings
+
+    # Proxy6.net (Proxy Provider)
+    proxy6_api_key: Optional[str] = None
+    proxy_pool_min_size: int = 500  # Minimum proxies in pool before auto-purchase
+    proxy_auto_purchase: bool = True  # Enable automatic proxy purchasing
+
     # TipTopPay (Billing)
     tiptoppay_public_id: Optional[str] = None
     tiptoppay_api_secret: Optional[str] = None

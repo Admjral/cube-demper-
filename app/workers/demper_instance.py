@@ -316,6 +316,7 @@ class DemperWorker:
                         products.strategy_params,
                         kaspi_stores.merchant_id,
                         kaspi_stores.guid,
+                        kaspi_stores.user_id,
                         COALESCE(ds.check_interval_minutes, 15) as check_interval_minutes,
                         COALESCE(ds.work_hours_start, '00:00') as work_hours_start,
                         COALESCE(ds.work_hours_end, '23:59') as work_hours_end,
@@ -461,8 +462,15 @@ class DemperWorker:
                     return False
                 logger.debug(f"[{sku}] Got session for merchant {merchant_id}")
 
-                # Fetch competitor prices
-                product_data = await parse_product_by_sku(str(external_id), session)
+                # Fetch competitor prices (with proxy rotation for module='demper')
+                user_id = product.get("user_id")
+                product_data = await parse_product_by_sku(
+                    str(external_id),
+                    session,
+                    user_id=user_id,
+                    use_proxy=True,  # ✅ Use proxy pool for demper module
+                    module='demper'
+                )
 
                 # Update last_check_time regardless of result
                 await self._update_last_check_time(product_id)
@@ -570,11 +578,14 @@ class DemperWorker:
                     logger.debug(f"No price change needed for {sku}: already at {current_price}")
                     return False
 
-                # Update price via Kaspi API
+                # Update price via Kaspi API (with proxy rotation for module='demper')
                 sync_result = await sync_product(
                     product_id=str(product_id),
                     new_price=int(target_price),
-                    session=session
+                    session=session,
+                    user_id=user_id,  # ✅ Use proxy pool
+                    use_proxy=True,   # ✅ Enable proxy rotation
+                    module='demper'   # ✅ Use demper module proxies (70 proxies)
                 )
 
                 if not sync_result or not sync_result.get("success"):

@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Annotated
 import asyncpg
 import uuid
+import logging
 from datetime import datetime, timedelta
 
 from ..schemas.billing import (
@@ -16,8 +17,11 @@ from ..schemas.billing import (
 from ..core.database import get_db_pool
 from ..dependencies import get_current_user
 from ..config import settings
+from ..services.proxy_allocator import proxy_allocator
+from ..services.proxy_provider import ensure_proxy_pool_sufficient
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 @router.get("/plans", response_model=list[SubscriptionPlan])
@@ -161,17 +165,45 @@ async def create_subscription(
             subscription_request.plan
         )
 
-        return SubscriptionResponse(
-            id=str(subscription['id']),
-            user_id=str(subscription['user_id']),
-            plan=subscription['plan'],
-            status=subscription['status'],
-            products_limit=subscription['products_limit'],
-            current_period_start=subscription['current_period_start'],
-            current_period_end=subscription['current_period_end'],
-            created_at=subscription['created_at'],
-            updated_at=subscription['updated_at']
+    # ✅ Allocate 100 proxies to user after successful subscription
+    user_id = uuid.UUID(current_user['id'])
+
+    try:
+        # Ensure proxy pool has enough proxies
+        logger.info(f"Checking proxy pool before allocating to user {user_id}")
+        await ensure_proxy_pool_sufficient(required_count=500)
+
+        # Allocate proxies with per-module distribution (70/25/5/0)
+        proxies_by_module = await proxy_allocator.allocate_proxies_to_user(
+            user_id=user_id,
+            count=100
         )
+
+        total_allocated = sum(len(proxies) for proxies in proxies_by_module.values())
+        logger.info(
+            f"✅ Allocated {total_allocated} proxies to user {user_id} "
+            f"({subscription_request.plan} plan): "
+            f"{len(proxies_by_module.get('demper', []))} demper, "
+            f"{len(proxies_by_module.get('orders', []))} orders, "
+            f"{len(proxies_by_module.get('catalog', []))} catalog"
+        )
+
+    except Exception as e:
+        logger.error(f"Failed to allocate proxies to user {user_id}: {e}")
+        # Don't fail the subscription - just log the error
+        # Admin can manually allocate proxies later
+
+    return SubscriptionResponse(
+        id=str(subscription['id']),
+        user_id=str(subscription['user_id']),
+        plan=subscription['plan'],
+        status=subscription['status'],
+        products_limit=subscription['products_limit'],
+        current_period_start=subscription['current_period_start'],
+        current_period_end=subscription['current_period_end'],
+        created_at=subscription['created_at'],
+        updated_at=subscription['updated_at']
+    )
 
 
 @router.get("/payments", response_model=PaymentListResponse)

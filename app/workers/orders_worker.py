@@ -25,6 +25,7 @@ from uuid import UUID
 
 from ..config import settings
 from ..core.database import get_db_pool, close_pool
+from ..core.proxy_rotator import get_user_proxy_rotator, NoProxiesAllocatedError, NoProxiesAvailableError
 from ..services.kaspi_auth_service import get_active_session_with_refresh, KaspiAuthError
 from ..services.kaspi_mc_service import get_kaspi_mc_service, KaspiMCError
 from ..services.order_event_processor import (
@@ -59,12 +60,12 @@ class OrdersWorker:
 
     def __init__(
         self,
-        polling_interval: int = 60,
+        polling_interval: int = 600,  # ✅ Changed from 60s to 600s (10 minutes) for proxy pool
         batch_size: int = 50,
     ):
         """
         Args:
-            polling_interval: Интервал опроса в секундах (по умолчанию 60)
+            polling_interval: Интервал опроса в секундах (по умолчанию 600 = 10 минут)
             batch_size: Количество заказов за один запрос (по умолчанию 50)
         """
         self.polling_interval = int(os.getenv("ORDERS_POLLING_INTERVAL", polling_interval))
@@ -157,9 +158,13 @@ class OrdersWorker:
             logger.warning(f"No session for store {store['name']}")
             return
 
-        # Запрашиваем заказы через Kaspi API
+        # Запрашиваем заказы через Kaspi API (с proxy rotation для module='orders')
         try:
-            orders = await self._fetch_kaspi_orders(session, merchant_id)
+            orders = await self._fetch_kaspi_orders(
+                session,
+                merchant_id,
+                user_id=user_id  # ✅ Use proxy pool for orders module (25 proxies)
+            )
         except Exception as e:
             logger.error(f"Error fetching orders from Kaspi: {e}")
             return
@@ -187,12 +192,14 @@ class OrdersWorker:
         self,
         session: dict,
         merchant_id: str,
+        user_id: Optional[UUID] = None,
         days_back: int = 7,
     ) -> List[Dict[str, Any]]:
         """
         Получить заказы из Kaspi API.
 
         Использует /v2/orders endpoint с фильтром по дате.
+        С поддержкой proxy rotation для module='orders'.
         """
         import httpx
 
@@ -222,22 +229,58 @@ class OrdersWorker:
             "page[size]": self.batch_size,
         }
 
+        # Get proxy rotator for orders module
+        rotator = None
+        proxy_url = None
+        use_proxy = user_id is not None
+
+        if use_proxy:
+            try:
+                rotator = await get_user_proxy_rotator(user_id, module='orders')
+                proxy = await rotator.get_current_proxy()
+                proxy_url = f"{proxy.protocol}://{proxy.username}:{proxy.password}@{proxy.host}:{proxy.port}"
+                logger.debug(f"Using proxy {proxy.id} for orders (merchant {merchant_id})")
+            except (NoProxiesAllocatedError, NoProxiesAvailableError) as e:
+                logger.warning(f"No proxies available for user {user_id}, module 'orders': {e}")
+                use_proxy = False
+
         try:
-            async with httpx.AsyncClient(timeout=30.0, cookies=cookies_dict) as client:
+            # Create HTTP client with or without proxy
+            if use_proxy and proxy_url:
+                client = httpx.AsyncClient(
+                    timeout=30.0,
+                    cookies=cookies_dict,
+                    proxies={"http://": proxy_url, "https://": proxy_url}
+                )
+            else:
+                client = httpx.AsyncClient(timeout=30.0, cookies=cookies_dict)
+
+            async with client:
                 response = await client.get(url, headers=headers, params=params)
 
                 if response.status_code == 401:
+                    if rotator:
+                        await rotator.record_request(success=False)
                     raise KaspiAuthError("Session expired")
 
                 if response.status_code != 200:
                     logger.warning(f"Kaspi API error: {response.status_code}")
+                    if rotator:
+                        await rotator.record_request(success=False)
                     return []
 
                 data = response.json()
+
+                # ✅ Record successful request with proxy
+                if rotator:
+                    await rotator.record_request(success=True)
+
                 return data.get("data", [])
 
         except httpx.RequestError as e:
             logger.error(f"Network error fetching orders: {e}")
+            if rotator:
+                await rotator.record_request(success=False)
             return []
 
     async def _process_order(self, store: dict, order_data: dict, conn):
