@@ -1,11 +1,27 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware
 from contextlib import asynccontextmanager
 import logging
 import time
 import asyncio
 
 from .config import settings
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Add security headers to all responses"""
+
+    async def dispatch(self, request: Request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["X-Frame-Options"] = "DENY"
+        response.headers["X-XSS-Protection"] = "1; mode=block"
+        response.headers["Referrer-Policy"] = "strict-origin-when-cross-origin"
+        # HSTS only in production (when not debug)
+        if not settings.debug:
+            response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+        return response
 from .core.database import create_pool, close_pool
 from .core.redis import create_redis_client, close_redis_client
 from .core.logger import setup_logging
@@ -88,13 +104,16 @@ app = FastAPI(
     redoc_url="/redoc" if settings.debug else None,
 )
 
+# Security headers middleware
+app.add_middleware(SecurityHeadersMiddleware)
+
 # CORS middleware - production-ready configuration
 app.add_middleware(
     CORSMiddleware,
     allow_origins=settings.cors_origins,
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH"],
-    allow_headers=["*"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
+    allow_headers=["Content-Type", "Authorization", "X-Requested-With", "Accept"],
     max_age=3600,  # Cache preflight requests for 1 hour
 )
 
@@ -102,11 +121,40 @@ app.add_middleware(
 # Health check endpoint
 @app.get("/health")
 async def health_check():
-    """Health check endpoint"""
+    """Health check endpoint with dependency validation"""
+    from .core.database import get_db_pool
+    from .core.redis import get_redis
+
+    checks = {
+        "database": "unknown",
+        "redis": "unknown",
+    }
+
+    # Check database
+    try:
+        pool = await get_db_pool()
+        async with pool.acquire() as conn:
+            await conn.fetchval("SELECT 1")
+        checks["database"] = "healthy"
+    except Exception as e:
+        checks["database"] = f"unhealthy: {str(e)[:50]}"
+
+    # Check Redis
+    try:
+        redis = await get_redis()
+        await redis.ping()
+        checks["redis"] = "healthy"
+    except Exception as e:
+        checks["redis"] = f"unhealthy: {str(e)[:50]}"
+
+    # Overall status
+    all_healthy = all(v == "healthy" for v in checks.values())
+
     return {
-        "status": "healthy",
+        "status": "healthy" if all_healthy else "degraded",
         "app": settings.app_name,
         "version": settings.app_version,
+        "checks": checks,
     }
 
 

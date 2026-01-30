@@ -154,8 +154,9 @@ async def forgot_password(
                 expires_delta=timedelta(hours=1)
             )
             # TODO: Send email with reset_token
-            # For now, just log it (in production, use email service)
-            print(f"Password reset token for {request.email}: {reset_token}")
+            # Token generated but not logged for security
+            import logging
+            logging.getLogger(__name__).info(f"Password reset requested for user_id={user['id']}")
 
         return {"message": "If the email exists, a password reset link has been sent"}
 

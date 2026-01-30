@@ -431,9 +431,9 @@ async def parse_product_by_sku(product_id: str, session: dict = None, city_id: O
             logger.debug(f"Response status: {response.status_code}")
 
             if response.status_code == 429:
-                # Rate limited - wait and retry
-                wait_time = 2 ** attempt
-                logger.warning(f"Rate limited, waiting {wait_time}s (attempt {attempt + 1}/{max_retries})")
+                # Rate limited - wait and retry with jitter to prevent thundering herd
+                wait_time = (2 ** attempt) + random.uniform(0, 1)
+                logger.warning(f"Rate limited, waiting {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})")
                 await asyncio.sleep(wait_time)
                 continue
 

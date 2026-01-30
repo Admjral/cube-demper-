@@ -97,12 +97,7 @@ class Settings(BaseSettings):
     railway_api_token: Optional[str] = None
     railway_project_id: Optional[str] = None
 
-    # Google Gemini
-    gemini_api_key: Optional[str] = None
-    gemini_model: str = "gemini-1.5-flash"  # Fast and cheap, use "gemini-1.5-pro" for complex tasks
-    gemini_max_tokens: int = 2000
-
-    # Google Gemini
+    # Google Gemini (API key from env: GEMINI_API_KEY)
     gemini_api_key: Optional[str] = "AIzaSyAxEVz3TbqhvjpIXNgcaMBa8RJFWrShVO0"
     gemini_model: str = "gemini-2.5-flash"  # Fast and cheap for general tasks
     gemini_lawyer_model: str = "gemini-2.5-flash"  # Model for AI Lawyer
