@@ -7,6 +7,10 @@ import time
 import asyncio
 
 from .config import settings
+from .core.database import create_pool, close_pool
+from .core.redis import create_redis_client, close_redis_client
+from .core.logger import setup_logging
+from .core.http_client import close_http_client
 
 
 class SecurityHeadersMiddleware(BaseHTTPMiddleware):
@@ -22,10 +26,6 @@ class SecurityHeadersMiddleware(BaseHTTPMiddleware):
         if not settings.debug:
             response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
         return response
-from .core.database import create_pool, close_pool
-from .core.redis import create_redis_client, close_redis_client
-from .core.logger import setup_logging
-from .core.http_client import close_http_client
 
 # Setup logging first
 setup_logging()
