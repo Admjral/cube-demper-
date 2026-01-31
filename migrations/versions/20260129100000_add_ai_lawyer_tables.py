@@ -19,12 +19,29 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Enable pgvector extension if not exists
-    op.execute("CREATE EXTENSION IF NOT EXISTS vector")
-    
+    # Try to enable pgvector extension - it's optional (not available on all PostgreSQL installations)
+    # RAG functionality will be disabled if pgvector is not available
+    from sqlalchemy import text
+    connection = op.get_bind()
+
+    # Check if pgvector extension is available
+    pgvector_available = False
+    try:
+        result = connection.execute(text("""
+            SELECT EXISTS(
+                SELECT 1 FROM pg_available_extensions WHERE name = 'vector'
+            )
+        """))
+        pgvector_available = result.scalar()
+    except Exception:
+        pgvector_available = False
+
+    if pgvector_available:
+        op.execute("CREATE EXTENSION IF NOT EXISTS vector")
+
     # Add lawyer_language to users table
     op.add_column('users', sa.Column('lawyer_language', sa.VARCHAR(10), nullable=False, server_default='ru'))
-    
+
     # Create legal_documents table - stores full law texts
     op.execute("""
         CREATE TABLE legal_documents (
@@ -44,30 +61,45 @@ def upgrade() -> None:
     op.create_index('idx_legal_documents_code', 'legal_documents', ['code'])
     op.create_index('idx_legal_documents_type', 'legal_documents', ['document_type'])
     op.create_index('idx_legal_documents_language', 'legal_documents', ['language'])
-    
-    # Create legal_articles table - stores law articles with embeddings for RAG
-    op.execute("""
-        CREATE TABLE legal_articles (
-            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-            document_id UUID REFERENCES legal_documents(id) ON DELETE CASCADE,
-            article_number VARCHAR(50),
-            title VARCHAR(500),
-            content TEXT NOT NULL,
-            embedding VECTOR(768),
-            created_at TIMESTAMPTZ DEFAULT NOW(),
-            updated_at TIMESTAMPTZ DEFAULT NOW()
-        )
-    """)
+
+    # Create legal_articles table - embedding column only if pgvector available
+    if pgvector_available:
+        op.execute("""
+            CREATE TABLE legal_articles (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                document_id UUID REFERENCES legal_documents(id) ON DELETE CASCADE,
+                article_number VARCHAR(50),
+                title VARCHAR(500),
+                content TEXT NOT NULL,
+                embedding VECTOR(768),
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
+    else:
+        # Create without vector column - RAG will use text search instead
+        op.execute("""
+            CREATE TABLE legal_articles (
+                id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+                document_id UUID REFERENCES legal_documents(id) ON DELETE CASCADE,
+                article_number VARCHAR(50),
+                title VARCHAR(500),
+                content TEXT NOT NULL,
+                created_at TIMESTAMPTZ DEFAULT NOW(),
+                updated_at TIMESTAMPTZ DEFAULT NOW()
+            )
+        """)
     op.create_index('idx_legal_articles_document', 'legal_articles', ['document_id'])
     op.create_index('idx_legal_articles_number', 'legal_articles', ['article_number'])
-    
-    # Create vector index for semantic search (IVFFlat for performance)
-    op.execute("""
-        CREATE INDEX idx_legal_articles_embedding 
-        ON legal_articles 
-        USING ivfflat (embedding vector_cosine_ops)
-        WITH (lists = 100)
-    """)
+
+    # Create vector index for semantic search only if pgvector available
+    if pgvector_available:
+        op.execute("""
+            CREATE INDEX idx_legal_articles_embedding
+            ON legal_articles
+            USING ivfflat (embedding vector_cosine_ops)
+            WITH (lists = 100)
+        """)
     
     # Create lawyer_documents table - stores generated documents (contracts, claims, etc.)
     op.execute("""
