@@ -894,13 +894,15 @@ async def get_user_subscription_details(
         "user_email": user['email'],
         "subscription": {
             "id": str(subscription['id']) if subscription else None,
+            "plan_id": str(subscription['plan_id']) if subscription and subscription.get('plan_id') else None,
             "plan_code": features['plan_code'],
             "plan_name": features['plan_name'],
             "status": subscription['status'] if subscription else None,
+            "analytics_limit": features['analytics_limit'],
+            "demping_limit": features['demping_limit'],
             "is_trial": features['is_trial'],
             "trial_ends_at": features['trial_ends_at'].isoformat() if features.get('trial_ends_at') else None,
-            "expires_at": features['subscription_ends_at'].isoformat() if features.get('subscription_ends_at') else None,
-            "assigned_by": str(subscription['assigned_by']) if subscription and subscription.get('assigned_by') else None,
+            "ends_at": features['subscription_ends_at'].isoformat() if features.get('subscription_ends_at') else None,
             "notes": subscription['notes'] if subscription else None,
         } if subscription else None,
         "addons": [
@@ -909,13 +911,17 @@ async def get_user_subscription_details(
                 "code": a['addon_code'],
                 "name": a['addon_name'],
                 "quantity": a['quantity'],
+                "status": a['status'],
+                "starts_at": a['starts_at'].isoformat() if a['starts_at'] else None,
                 "expires_at": a['expires_at'].isoformat() if a['expires_at'] else None,
             }
             for a in addons
         ],
-        "effective_features": features['features'],
-        "analytics_limit": features['analytics_limit'],
-        "demping_limit": features['demping_limit'],
+        "computed_features": features['features'],
+        "computed_limits": {
+            "analytics_limit": features['analytics_limit'],
+            "demping_limit": features['demping_limit'],
+        },
     }
 
 
