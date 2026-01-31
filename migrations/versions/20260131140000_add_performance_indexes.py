@@ -17,42 +17,31 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
-    # Index for products.external_kaspi_id - used in demper worker product lookup
-    op.create_index(
-        'idx_products_external_kaspi_id',
-        'products',
-        ['external_kaspi_id'],
-        if_not_exists=True
-    )
+    # Use raw SQL with IF NOT EXISTS for safety
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_products_external_kaspi_id
+        ON products(external_kaspi_id)
+    """)
 
-    # Partial index for kaspi_stores.needs_reauth - filters stores needing reauth
-    op.create_index(
-        'idx_kaspi_stores_needs_reauth_true',
-        'kaspi_stores',
-        ['needs_reauth'],
-        postgresql_where='needs_reauth = TRUE',
-        if_not_exists=True
-    )
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_kaspi_stores_needs_reauth_true
+        ON kaspi_stores(needs_reauth)
+        WHERE needs_reauth = TRUE
+    """)
 
-    # Index for demping_settings.store_id - used in LEFT JOIN in demper worker
-    op.create_index(
-        'idx_demping_settings_store_id',
-        'demping_settings',
-        ['store_id'],
-        if_not_exists=True
-    )
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_demping_settings_store_id
+        ON demping_settings(store_id)
+    """)
 
-    # Composite index for common admin query pattern
-    op.create_index(
-        'idx_users_role_created',
-        'users',
-        ['role', 'created_at'],
-        if_not_exists=True
-    )
+    op.execute("""
+        CREATE INDEX IF NOT EXISTS idx_users_role_created
+        ON users(role, created_at)
+    """)
 
 
 def downgrade() -> None:
-    op.drop_index('idx_users_role_created', table_name='users', if_exists=True)
-    op.drop_index('idx_demping_settings_store_id', table_name='demping_settings', if_exists=True)
-    op.drop_index('idx_kaspi_stores_needs_reauth_true', table_name='kaspi_stores', if_exists=True)
-    op.drop_index('idx_products_external_kaspi_id', table_name='products', if_exists=True)
+    op.execute("DROP INDEX IF EXISTS idx_users_role_created")
+    op.execute("DROP INDEX IF EXISTS idx_demping_settings_store_id")
+    op.execute("DROP INDEX IF EXISTS idx_kaspi_stores_needs_reauth_true")
+    op.execute("DROP INDEX IF EXISTS idx_products_external_kaspi_id")
