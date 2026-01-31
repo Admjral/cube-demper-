@@ -363,33 +363,65 @@ class AILawyerService:
         language: str = "ru"
     ) -> List[Dict[str, Any]]:
         """
-        Search for relevant legal articles using vector similarity.
-        
+        Search for relevant legal articles.
+
+        Uses vector similarity if pgvector is available, otherwise falls back to text search.
         Returns list of relevant articles with their metadata.
         """
         try:
-            # Get query embedding
-            embedding = await self._get_embedding(query)
-            
             async with pool.acquire() as conn:
-                # Search for similar articles
-                results = await conn.fetch("""
-                    SELECT 
-                        la.id,
-                        la.article_number,
-                        la.title,
-                        la.content,
-                        ld.title as document_title,
-                        ld.code as document_code,
-                        ld.source_url,
-                        1 - (la.embedding <=> $1::vector) as similarity
-                    FROM legal_articles la
-                    JOIN legal_documents ld ON la.document_id = ld.id
-                    WHERE ld.language = $3
-                    ORDER BY la.embedding <=> $1::vector
-                    LIMIT $2
-                """, embedding, limit, language)
-                
+                # Check if embedding column exists (pgvector available)
+                has_embedding = await conn.fetchval("""
+                    SELECT EXISTS (
+                        SELECT 1 FROM information_schema.columns
+                        WHERE table_name = 'legal_articles' AND column_name = 'embedding'
+                    )
+                """)
+
+                if has_embedding:
+                    # Use vector similarity search
+                    embedding = await self._get_embedding(query)
+                    results = await conn.fetch("""
+                        SELECT
+                            la.id,
+                            la.article_number,
+                            la.title,
+                            la.content,
+                            ld.title as document_title,
+                            ld.code as document_code,
+                            ld.source_url,
+                            1 - (la.embedding <=> $1::vector) as similarity
+                        FROM legal_articles la
+                        JOIN legal_documents ld ON la.document_id = ld.id
+                        WHERE ld.language = $3
+                        ORDER BY la.embedding <=> $1::vector
+                        LIMIT $2
+                    """, embedding, limit, language)
+                else:
+                    # Fallback to full-text search
+                    # Clean query for tsquery
+                    search_terms = ' & '.join(query.split()[:5])  # Use first 5 words
+                    results = await conn.fetch("""
+                        SELECT
+                            la.id,
+                            la.article_number,
+                            la.title,
+                            la.content,
+                            ld.title as document_title,
+                            ld.code as document_code,
+                            ld.source_url,
+                            ts_rank(
+                                to_tsvector('russian', la.content),
+                                plainto_tsquery('russian', $1)
+                            ) as similarity
+                        FROM legal_articles la
+                        JOIN legal_documents ld ON la.document_id = ld.id
+                        WHERE ld.language = $3
+                          AND to_tsvector('russian', la.content) @@ plainto_tsquery('russian', $1)
+                        ORDER BY similarity DESC
+                        LIMIT $2
+                    """, query, limit, language)
+
                 return [
                     {
                         "id": str(r['id']),
@@ -399,12 +431,12 @@ class AILawyerService:
                         "document_title": r['document_title'],
                         "document_code": r['document_code'],
                         "source_url": r['source_url'],
-                        "similarity": float(r['similarity'])
+                        "similarity": float(r['similarity']) if r['similarity'] else 0.0
                     }
                     for r in results
                 ]
         except Exception as e:
-            logger.warning(f"RAG search failed: {e}")
+            logger.warning(f"Legal context search failed: {e}")
             return []
     
     def _build_context(self, articles: List[Dict[str, Any]]) -> str:
