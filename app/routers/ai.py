@@ -17,7 +17,7 @@ from ..schemas.ai import (
     ClearHistoryRequest,
 )
 from ..core.database import get_db_pool
-from ..dependencies import get_current_user
+from ..dependencies import get_current_user, require_feature
 from ..config import settings
 from ..services.ai_salesman_service import (
     process_order_for_upsell,
@@ -264,7 +264,7 @@ async def clear_chat_history(
 @router.post("/salesman/process-order", response_model=SalesmanMessageResponse)
 async def process_order_salesman(
     request: ProcessOrderRequest,
-    current_user: Annotated[dict, Depends(get_current_user)],
+    current_user: Annotated[dict, require_feature("ai_salesman")],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
 ):
     """
@@ -329,7 +329,7 @@ async def process_order_salesman(
 async def process_orders_bulk(
     request: BulkProcessRequest,
     background_tasks: BackgroundTasks,
-    current_user: Annotated[dict, Depends(get_current_user)],
+    current_user: Annotated[dict, require_feature("ai_salesman")],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
 ):
     """

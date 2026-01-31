@@ -710,3 +710,235 @@ async def list_payments(
             page=page,
             page_size=page_size
         )
+
+
+# --- New tariff system subscription management ---
+
+from pydantic import BaseModel
+from typing import Optional
+from ..services.feature_access import get_feature_access_service
+
+
+class AssignSubscriptionRequest(BaseModel):
+    """Request to assign subscription to user"""
+    plan_code: str  # 'basic', 'standard', 'premium'
+    days: int = 30  # Duration in days
+    is_trial: bool = False
+    notes: Optional[str] = None
+
+
+class AssignAddonRequest(BaseModel):
+    """Request to assign add-on to user"""
+    addon_code: str  # 'ai_salesman', 'demping_100', etc.
+    quantity: int = 1  # For stackable add-ons
+    days: int = 30  # Duration in days
+
+
+@router.post("/users/{user_id}/subscription", status_code=status.HTTP_201_CREATED)
+async def assign_subscription(
+    user_id: str,
+    request: AssignSubscriptionRequest,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Assign subscription to user (admin only) - New tariff system"""
+    async with pool.acquire() as conn:
+        # Get plan
+        plan = await conn.fetchrow(
+            "SELECT * FROM plans WHERE code = $1 AND is_active = true",
+            request.plan_code
+        )
+        if not plan:
+            raise HTTPException(status_code=404, detail="Plan not found")
+
+        # Check if user exists
+        user = await conn.fetchrow("SELECT id FROM users WHERE id = $1", uuid.UUID(user_id))
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        # Deactivate existing subscriptions
+        await conn.execute(
+            "UPDATE subscriptions SET status = 'cancelled' WHERE user_id = $1 AND status = 'active'",
+            uuid.UUID(user_id)
+        )
+
+        # Create new subscription
+        now = datetime.now()
+        period_end = now + timedelta(days=request.days)
+        is_trial = request.is_trial and plan['trial_days'] > 0
+        trial_ends_at = now + timedelta(days=plan['trial_days']) if is_trial else None
+
+        subscription = await conn.fetchrow("""
+            INSERT INTO subscriptions (
+                user_id, plan_id, plan, status, products_limit,
+                analytics_limit, demping_limit,
+                current_period_start, current_period_end,
+                is_trial, trial_ends_at, assigned_by, notes
+            )
+            VALUES ($1, $2, $3, 'active', $4, $5, $6, $7, $8, $9, $10, $11, $12)
+            RETURNING id, plan, status, current_period_end
+        """,
+            uuid.UUID(user_id),
+            plan['id'],
+            plan['code'],
+            plan['demping_limit'],  # Legacy products_limit
+            plan['analytics_limit'],
+            plan['demping_limit'],
+            now,
+            period_end,
+            is_trial,
+            trial_ends_at,
+            current_admin['id'],
+            request.notes
+        )
+
+    return {
+        "status": "success",
+        "subscription_id": str(subscription['id']),
+        "plan": subscription['plan'],
+        "expires_at": subscription['current_period_end'].isoformat()
+    }
+
+
+@router.post("/users/{user_id}/addon", status_code=status.HTTP_201_CREATED)
+async def assign_addon(
+    user_id: str,
+    request: AssignAddonRequest,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Assign add-on to user (admin only) - New tariff system"""
+    async with pool.acquire() as conn:
+        # Get addon
+        addon = await conn.fetchrow(
+            "SELECT * FROM addons WHERE code = $1 AND is_active = true",
+            request.addon_code
+        )
+        if not addon:
+            raise HTTPException(status_code=404, detail="Add-on not found")
+
+        # Check if user exists
+        user = await conn.fetchrow("SELECT id FROM users WHERE id = $1", uuid.UUID(user_id))
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        now = datetime.now()
+        expires_at = now + timedelta(days=request.days) if addon['is_recurring'] else None
+
+        # Upsert: update quantity if exists, insert otherwise
+        result = await conn.fetchrow("""
+            INSERT INTO user_addons (user_id, addon_id, quantity, status, starts_at, expires_at)
+            VALUES ($1, $2, $3, 'active', $4, $5)
+            ON CONFLICT (user_id, addon_id)
+            DO UPDATE SET
+                quantity = user_addons.quantity + $3,
+                expires_at = GREATEST(user_addons.expires_at, $5),
+                status = 'active',
+                updated_at = NOW()
+            RETURNING id, quantity
+        """,
+            uuid.UUID(user_id),
+            addon['id'],
+            request.quantity,
+            now,
+            expires_at
+        )
+
+    return {
+        "status": "success",
+        "user_addon_id": str(result['id']),
+        "addon_code": request.addon_code,
+        "quantity": result['quantity'],
+        "expires_at": expires_at.isoformat() if expires_at else None
+    }
+
+
+@router.get("/users/{user_id}/subscription-details")
+async def get_user_subscription_details(
+    user_id: str,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get detailed subscription info for user (admin only) - New tariff system"""
+    # Check if user exists
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow("SELECT id, email FROM users WHERE id = $1", uuid.UUID(user_id))
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+    # Get features from service
+    service = get_feature_access_service()
+    features = await service.get_user_features(pool, uuid.UUID(user_id))
+
+    # Get subscription record
+    async with pool.acquire() as conn:
+        subscription = await conn.fetchrow("""
+            SELECT s.*, p.name as plan_name, p.price_tiyns, p.features as plan_features
+            FROM subscriptions s
+            LEFT JOIN plans p ON p.id = s.plan_id
+            WHERE s.user_id = $1 AND s.status = 'active'
+            ORDER BY s.created_at DESC LIMIT 1
+        """, uuid.UUID(user_id))
+
+        # Get user add-ons
+        addons = await conn.fetch("""
+            SELECT ua.*, a.code as addon_code, a.name as addon_name, a.price_tiyns
+            FROM user_addons ua
+            JOIN addons a ON a.id = ua.addon_id
+            WHERE ua.user_id = $1 AND ua.status = 'active'
+            AND (ua.expires_at IS NULL OR ua.expires_at >= NOW())
+        """, uuid.UUID(user_id))
+
+    return {
+        "user_id": str(user_id),
+        "user_email": user['email'],
+        "subscription": {
+            "id": str(subscription['id']) if subscription else None,
+            "plan_code": features['plan_code'],
+            "plan_name": features['plan_name'],
+            "status": subscription['status'] if subscription else None,
+            "is_trial": features['is_trial'],
+            "trial_ends_at": features['trial_ends_at'].isoformat() if features.get('trial_ends_at') else None,
+            "expires_at": features['subscription_ends_at'].isoformat() if features.get('subscription_ends_at') else None,
+            "assigned_by": str(subscription['assigned_by']) if subscription and subscription.get('assigned_by') else None,
+            "notes": subscription['notes'] if subscription else None,
+        } if subscription else None,
+        "addons": [
+            {
+                "id": str(a['id']),
+                "code": a['addon_code'],
+                "name": a['addon_name'],
+                "quantity": a['quantity'],
+                "expires_at": a['expires_at'].isoformat() if a['expires_at'] else None,
+            }
+            for a in addons
+        ],
+        "effective_features": features['features'],
+        "analytics_limit": features['analytics_limit'],
+        "demping_limit": features['demping_limit'],
+    }
+
+
+@router.delete("/users/{user_id}/addon/{addon_code}", status_code=status.HTTP_200_OK)
+async def remove_addon(
+    user_id: str,
+    addon_code: str,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Remove add-on from user (admin only)"""
+    async with pool.acquire() as conn:
+        # Get addon
+        addon = await conn.fetchrow("SELECT id FROM addons WHERE code = $1", addon_code)
+        if not addon:
+            raise HTTPException(status_code=404, detail="Add-on not found")
+
+        result = await conn.execute("""
+            UPDATE user_addons SET status = 'cancelled', updated_at = NOW()
+            WHERE user_id = $1 AND addon_id = $2 AND status = 'active'
+        """, uuid.UUID(user_id), addon['id'])
+
+        if result == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="User does not have this add-on")
+
+    return {"status": "success", "message": f"Add-on {addon_code} removed from user"}

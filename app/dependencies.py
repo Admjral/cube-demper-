@@ -105,3 +105,50 @@ async def get_db() -> asyncpg.Pool:
 async def get_redis_client() -> redis.Redis:
     """Dependency alias for Redis client"""
     return await get_redis()
+
+
+# Feature access dependencies
+from fastapi import HTTPException, status
+from .services.feature_access import get_feature_access_service
+
+
+async def get_user_with_features(
+    current_user: dict = Depends(get_current_user),
+    pool: asyncpg.Pool = Depends(get_db_pool)
+) -> dict:
+    """Get current user with their feature access info attached."""
+    service = get_feature_access_service()
+    features = await service.get_user_features(pool, current_user['id'])
+    return {**current_user, 'subscription': features}
+
+
+def require_feature(feature: str):
+    """
+    Dependency factory for feature-gated endpoints.
+
+    Usage:
+        @router.get("/preorders")
+        async def list_preorders(
+            current_user: Annotated[dict, require_feature("preorder")],
+            ...
+        ):
+    """
+    async def dependency(
+        current_user: dict = Depends(get_current_user),
+        pool: asyncpg.Pool = Depends(get_db_pool)
+    ) -> dict:
+        service = get_feature_access_service()
+        has_access, message = await service.check_feature_access(
+            pool, current_user['id'], feature
+        )
+        if not has_access:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail={
+                    "error": "feature_not_available",
+                    "feature": feature,
+                    "message": message
+                }
+            )
+        return current_user
+    return Depends(dependency)

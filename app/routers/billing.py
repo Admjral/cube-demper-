@@ -283,3 +283,78 @@ async def cancel_subscription(
             )
 
     return {"status": "success", "message": "Subscription cancelled"}
+
+
+# --- New tariff system endpoints ---
+
+from ..services.feature_access import get_feature_access_service
+
+
+@router.get("/features")
+async def get_user_features(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get current user's features and limits based on subscription and add-ons."""
+    service = get_feature_access_service()
+    features = await service.get_user_features(pool, current_user['id'])
+    return features
+
+
+@router.get("/plans-v2")
+async def get_plans_v2(
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get available plans from database (new tariff system)."""
+    async with pool.acquire() as conn:
+        plans = await conn.fetch("""
+            SELECT id, code, name, price_tiyns, analytics_limit, demping_limit,
+                   features, trial_days, display_order
+            FROM plans
+            WHERE is_active = true
+            ORDER BY display_order
+        """)
+
+    return [
+        {
+            "id": str(p['id']),
+            "code": p['code'],
+            "name": p['name'],
+            "price": p['price_tiyns'] / 100,  # Convert to tenge
+            "analytics_limit": p['analytics_limit'],
+            "demping_limit": p['demping_limit'],
+            "features": p['features'],
+            "trial_days": p['trial_days'],
+        }
+        for p in plans
+    ]
+
+
+@router.get("/addons")
+async def get_addons(
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get available add-ons from database."""
+    async with pool.acquire() as conn:
+        addons = await conn.fetch("""
+            SELECT id, code, name, description, price_tiyns, is_recurring,
+                   stackable, features, extra_limits
+            FROM addons
+            WHERE is_active = true
+            ORDER BY price_tiyns
+        """)
+
+    return [
+        {
+            "id": str(a['id']),
+            "code": a['code'],
+            "name": a['name'],
+            "description": a['description'],
+            "price": a['price_tiyns'] / 100,  # Convert to tenge
+            "is_recurring": a['is_recurring'],
+            "stackable": a['stackable'],
+            "features": a['features'],
+            "extra_limits": a['extra_limits'],
+        }
+        for a in addons
+    ]
