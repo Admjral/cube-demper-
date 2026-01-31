@@ -147,3 +147,25 @@ class UserDetailsResponse(BaseModel):
     subscription: Optional[dict] = None
     stores: List[dict] = []
     payments: List[dict] = []
+
+
+class PaymentAdminResponse(BaseModel):
+    """Schema for payment admin response"""
+    id: str
+    user_id: str
+    user_email: str
+    amount: int  # in tiyns
+    status: str
+    plan: Optional[str]
+    created_at: datetime
+
+    class Config:
+        from_attributes = True
+
+
+class PaymentListResponse(BaseModel):
+    """Schema for payment list"""
+    payments: List[PaymentAdminResponse]
+    total: int
+    page: int
+    page_size: int

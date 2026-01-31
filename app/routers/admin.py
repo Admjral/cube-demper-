@@ -20,6 +20,8 @@ from ..schemas.admin import (
     StoreAdminResponse,
     StoreListResponse,
     UserDetailsResponse,
+    PaymentAdminResponse,
+    PaymentListResponse,
 )
 from ..core.database import get_db_pool
 from ..core.redis import get_redis, get_online_users
@@ -654,6 +656,56 @@ async def list_stores(
 
         return StoreListResponse(
             stores=store_responses,
+            total=total,
+            page=page,
+            page_size=page_size
+        )
+
+
+@router.get("/payments", response_model=PaymentListResponse)
+async def list_payments(
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    page: int = 1,
+    page_size: int = 50
+):
+    """List all payments with user information (admin only)"""
+    offset = (page - 1) * page_size
+
+    async with pool.acquire() as conn:
+        # Get total count
+        total = await conn.fetchval("SELECT COUNT(*) FROM payments")
+
+        # Get payments with user info
+        payments = await conn.fetch(
+            """
+            SELECT
+                p.id, p.user_id, p.amount, p.status, p.plan, p.created_at,
+                u.email as user_email
+            FROM payments p
+            JOIN users u ON u.id = p.user_id
+            ORDER BY p.created_at DESC
+            LIMIT $1 OFFSET $2
+            """,
+            page_size,
+            offset
+        )
+
+        payment_responses = [
+            PaymentAdminResponse(
+                id=str(p['id']),
+                user_id=str(p['user_id']),
+                user_email=p['user_email'],
+                amount=p['amount'],
+                status=p['status'],
+                plan=p['plan'],
+                created_at=p['created_at']
+            )
+            for p in payments
+        ]
+
+        return PaymentListResponse(
+            payments=payment_responses,
             total=total,
             page=page,
             page_size=page_size
