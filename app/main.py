@@ -77,6 +77,13 @@ async def lifespan(app: FastAPI):
         logger.info("[STARTUP] Starting Playwright verification in background...")
         asyncio.create_task(verify_playwright_background())
 
+        # Load legal documents into RAG system in background
+        logger.info("[STARTUP] Starting legal docs loader in background...")
+        from .services.legal_docs_loader import load_legal_docs_background
+        from .core.database import get_db_pool
+        pool = await get_db_pool()
+        asyncio.create_task(load_legal_docs_background(pool))
+
         total_elapsed = time.time() - total_start
         logger.info(f"[STARTUP] ✅ Application ready in {total_elapsed:.2f}s")
 

@@ -139,7 +139,7 @@ async def process_pdf(pdf_path: Path, conn: asyncpg.Connection) -> dict:
     
     # Insert main document
     doc_id = await conn.fetchval("""
-        INSERT INTO legal_documents (title, category, full_text, source_url)
+        INSERT INTO legal_documents (title, document_type, full_text, source_url)
         VALUES ($1, $2, $3, $4)
         RETURNING id
     """, filename, "Законодательство РК", full_text, f"file://{pdf_path}")
@@ -159,16 +159,15 @@ async def process_pdf(pdf_path: Path, conn: asyncpg.Connection) -> dict:
         
         # Insert article/chunk
         await conn.execute("""
-            INSERT INTO legal_articles 
-            (document_id, article_number, title, content, embedding, keywords)
-            VALUES ($1, $2, $3, $4, $5, $6)
-        """, 
+            INSERT INTO legal_articles
+            (document_id, article_number, title, content, embedding)
+            VALUES ($1, $2, $3, $4, $5)
+        """,
             doc_id,
             str(chunk["chunk_num"]),
             chunk["article_reference"] or f"Чанк {chunk['chunk_num']}",
             chunk["text"],
             embedding,
-            []  # keywords можно добавить позже
         )
         
         # Progress
