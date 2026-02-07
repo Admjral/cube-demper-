@@ -10,6 +10,7 @@ from .ai_chat import AIChatHistory
 from .subscription import Subscription
 from .payment import Payment
 from .partner import Partner
+from .niche import NicheCategory, NicheProduct, NicheProductHistory
 
 __all__ = [
     "User",
@@ -23,4 +24,7 @@ __all__ = [
     "Subscription",
     "Payment",
     "Partner",
+    "NicheCategory",
+    "NicheProduct",
+    "NicheProductHistory",
 ]
