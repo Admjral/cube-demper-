@@ -84,6 +84,11 @@ async def lifespan(app: FastAPI):
         pool = await get_db_pool()
         asyncio.create_task(load_legal_docs_background(pool))
 
+        # Start periodic orders sync in background (every 60 min)
+        logger.info("[STARTUP] Starting periodic orders sync in background...")
+        from .services.orders_sync_service import periodic_orders_sync
+        asyncio.create_task(periodic_orders_sync(pool))
+
         total_elapsed = time.time() - total_start
         logger.info(f"[STARTUP] ✅ Application ready in {total_elapsed:.2f}s")
 
