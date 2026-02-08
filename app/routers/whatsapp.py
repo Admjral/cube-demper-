@@ -636,19 +636,25 @@ async def create_template(
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """Создать шаблон сообщения"""
+    import json as json_module
+    # asyncpg requires JSON string for JSONB columns
+    variables_json = None
+    if template_data.variables is not None:
+        variables_json = json_module.dumps(template_data.variables, ensure_ascii=False, default=str)
+
     async with pool.acquire() as conn:
         template = await conn.fetchrow(
             """
             INSERT INTO whatsapp_templates (
                 user_id, name, message, variables, trigger_event, is_active
             )
-            VALUES ($1, $2, $3, $4, $5, $6)
+            VALUES ($1, $2, $3, $4::jsonb, $5, $6)
             RETURNING *
             """,
             current_user['id'],
             template_data.name,
             template_data.message,
-            template_data.variables,
+            variables_json,
             template_data.trigger_event,
             template_data.is_active
         )
