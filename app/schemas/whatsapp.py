@@ -86,9 +86,10 @@ class WhatsAppTemplateResponse(BaseModel):
     id: str
     user_id: str
     name: str
+    name_en: Optional[str] = None
     message: str
-    variables: Optional[Dict[str, str]]
-    trigger_event: Optional[str]
+    variables: Optional[Any] = None
+    trigger_event: Optional[str] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime
