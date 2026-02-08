@@ -346,35 +346,13 @@ class KaspiMCService:
 
         cookies = session.get('cookies', [])
 
+        # Use introspection-safe query: first try to discover the orders schema
+        # MC GraphQL orders type is not Relay-style (no edges/node)
         query = """
         query getOrdersForSync {
             merchant(id: "%s") {
                 orders {
-                    edges {
-                        node {
-                            code
-                            state
-                            createdAt
-                            totalPrice
-                            customer {
-                                phoneNumber
-                                firstName
-                                lastName
-                            }
-                            entries {
-                                productName
-                                quantity
-                                basePrice
-                            }
-                            deliveryAddress {
-                                city
-                                street
-                                building
-                                apartment
-                            }
-                        }
-                    }
-                    totalCount
+                    __typename
                 }
             }
         }
@@ -419,16 +397,19 @@ class KaspiMCService:
 
                 data = response.json()
 
+                # Log raw response for debugging schema
+                logger.info(f"MC GraphQL raw response: {json.dumps(data, ensure_ascii=False, default=str)[:2000]}")
+
                 if "errors" in data:
                     error_msg = data["errors"][0].get("message", "Unknown error")
                     logger.error(f"GraphQL error fetching orders for sync: {error_msg}")
                     raise KaspiMCError(f"GraphQL error: {error_msg}")
 
                 orders_data = data.get("data", {}).get("merchant", {}).get("orders", {})
-                edges = orders_data.get("edges", [])
-                total = orders_data.get("totalCount", 0)
+                logger.info(f"Orders data keys: {list(orders_data.keys()) if isinstance(orders_data, dict) else type(orders_data)}")
 
-                logger.info(f"MC GraphQL returned {len(edges)} orders (total: {total}) for merchant {merchant_id}")
+                # Schema discovery mode - return empty, check logs for structure
+                return []
 
                 # Convert to Open API compatible format for parse_order_details()
                 result = []
