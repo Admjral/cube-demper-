@@ -359,3 +359,105 @@ async def get_addons(
         }
         for a in addons
     ]
+
+
+@router.post("/activate-trial")
+async def activate_trial(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """
+    Activate a free trial of the basic plan for the current user.
+    Only works if user has never had a real plan (plan_id IS NULL).
+    """
+    user_id = current_user['id']
+
+    async with pool.acquire() as conn:
+        # Check if user already has/had a subscription with a real plan
+        existing = await conn.fetchrow("""
+            SELECT id FROM subscriptions
+            WHERE user_id = $1 AND plan_id IS NOT NULL
+            LIMIT 1
+        """, user_id)
+
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пробный период уже был использован"
+            )
+
+        # Anti-abuse: check if any of the user's stores (by merchant_id)
+        # have already been used for a trial on ANY account
+        store_trial_used = await conn.fetchrow("""
+            SELECT s.merchant_id
+            FROM kaspi_stores ks_current
+            JOIN kaspi_stores s ON s.merchant_id = ks_current.merchant_id
+                AND s.user_id != $1
+            JOIN subscriptions sub ON sub.user_id = s.user_id
+                AND sub.plan_id IS NOT NULL
+                AND sub.is_trial = TRUE
+            WHERE ks_current.user_id = $1
+            LIMIT 1
+        """, user_id)
+
+        if store_trial_used:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пробный период уже был использован для этого магазина"
+            )
+
+        # Get the basic plan (the only one with trial_days > 0)
+        plan = await conn.fetchrow("""
+            SELECT id, code, name, analytics_limit, demping_limit, features, trial_days
+            FROM plans
+            WHERE code = 'basic' AND is_active = true
+        """)
+
+        if not plan or plan['trial_days'] <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пробный период недоступен"
+            )
+
+        now = datetime.utcnow()
+        trial_days = plan['trial_days']
+        period_end = now + timedelta(days=trial_days)
+
+        # Deactivate any existing free subscriptions
+        await conn.execute("""
+            UPDATE subscriptions SET status = 'cancelled'
+            WHERE user_id = $1 AND status = 'active'
+        """, user_id)
+
+        # Create trial subscription
+        sub_id = await conn.fetchval("""
+            INSERT INTO subscriptions (
+                user_id, plan_id, plan, status, products_limit,
+                analytics_limit, demping_limit,
+                current_period_start, current_period_end,
+                is_trial, trial_ends_at
+            ) VALUES (
+                $1, $2, $3, 'active', $4, $5, $6, $7, $8, TRUE, $8
+            )
+            RETURNING id
+        """,
+            user_id,
+            plan['id'],
+            plan['code'],
+            plan['demping_limit'],
+            plan['analytics_limit'],
+            plan['demping_limit'],
+            now,
+            period_end,
+        )
+
+        logger.info(f"[TRIAL] User {user_id} activated trial: plan={plan['code']}, days={trial_days}")
+
+        return {
+            "status": "success",
+            "subscription_id": str(sub_id),
+            "plan": plan['code'],
+            "plan_name": plan['name'],
+            "trial_days": trial_days,
+            "expires_at": period_end.isoformat(),
+        }

@@ -725,6 +725,7 @@ class AssignSubscriptionRequest(BaseModel):
     days: int = 30  # Duration in days
     is_trial: bool = False
     notes: Optional[str] = None
+    ends_at: Optional[str] = None  # ISO datetime, overrides days if set
 
 
 class AssignAddonRequest(BaseModel):
@@ -764,7 +765,10 @@ async def assign_subscription(
 
         # Create new subscription
         now = datetime.now()
-        period_end = now + timedelta(days=request.days)
+        if request.ends_at:
+            period_end = datetime.fromisoformat(request.ends_at.replace('Z', '+00:00')).replace(tzinfo=None)
+        else:
+            period_end = now + timedelta(days=request.days)
         is_trial = request.is_trial and plan['trial_days'] > 0
         trial_ends_at = now + timedelta(days=plan['trial_days']) if is_trial else None
 
@@ -798,6 +802,25 @@ async def assign_subscription(
         "plan": subscription['plan'],
         "expires_at": subscription['current_period_end'].isoformat()
     }
+
+
+@router.post("/users/{user_id}/subscription/cancel")
+async def cancel_user_subscription(
+    user_id: str,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Cancel user's active subscription (admin only)"""
+    async with pool.acquire() as conn:
+        result = await conn.execute(
+            "UPDATE subscriptions SET status = 'cancelled' WHERE user_id = $1 AND status = 'active'",
+            uuid.UUID(user_id)
+        )
+
+        if result == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="No active subscription found")
+
+    return {"status": "success"}
 
 
 @router.post("/users/{user_id}/addon", status_code=status.HTTP_201_CREATED)
