@@ -673,7 +673,10 @@ class AILawyerService:
                     ORDER BY created_at ASC
                     LIMIT 10
                 """, user_id)
-                messages = [{"role": h['role'], "parts": [h['content']]} for h in history]
+                messages = [
+                    {"role": "user" if h['role'] == "user" else "model", "parts": [h['content']]}
+                    for h in history
+                ]
         
         # Generate response
         try:

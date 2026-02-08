@@ -77,14 +77,7 @@ async def chat_with_lawyer(
     lawyer = get_ai_lawyer()
     
     try:
-        # Save user message to history
-        async with pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO ai_chat_history (user_id, assistant_type, role, content)
-                VALUES ($1, 'lawyer', 'user', $2)
-            """, current_user['id'], request.message)
-        
-        # Get response from AI Lawyer
+        # Get response from AI Lawyer (save messages AFTER to avoid duplicate in history)
         response_text, sources = await lawyer.chat(
             message=request.message,
             pool=pool,
@@ -93,9 +86,13 @@ async def chat_with_lawyer(
             include_history=request.include_history,
             use_rag=request.use_rag
         )
-        
-        # Save assistant response to history
+
+        # Save both user message and assistant response to history
         async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO ai_chat_history (user_id, assistant_type, role, content)
+                VALUES ($1, 'lawyer', 'user', $2)
+            """, current_user['id'], request.message)
             await conn.execute("""
                 INSERT INTO ai_chat_history (user_id, assistant_type, role, content)
                 VALUES ($1, 'lawyer', 'assistant', $2)
