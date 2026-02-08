@@ -687,7 +687,7 @@ async def create_template(
         )
 
 
-@router.put("/templates/{template_id}", response_model=WhatsAppTemplateResponse)
+@router.patch("/templates/{template_id}", response_model=WhatsAppTemplateResponse)
 async def update_template(
     template_id: str,
     template_data: WhatsAppTemplateUpdate,
