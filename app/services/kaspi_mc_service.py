@@ -347,9 +347,9 @@ class KaspiMCService:
         cookies = session.get('cookies', [])
 
         query = """
-        query getOrdersForSync($first: Int!) {
+        query getOrdersForSync {
             merchant(id: "%s") {
-                orders(first: $first) {
+                orders {
                     edges {
                         node {
                             code
@@ -382,7 +382,7 @@ class KaspiMCService:
 
         payload = {
             "query": query,
-            "variables": {"first": limit},
+            "variables": {},
             "operationName": "getOrdersForSync"
         }
 
