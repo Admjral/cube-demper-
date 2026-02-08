@@ -323,7 +323,7 @@ async def get_plans_v2(
             "price": p['price_tiyns'] / 100,  # Convert to tenge
             "analytics_limit": p['analytics_limit'],
             "demping_limit": p['demping_limit'],
-            "features": p['features'],
+            "features": p['features'] or [],
             "trial_days": p['trial_days'],
         }
         for p in plans
@@ -353,7 +353,7 @@ async def get_addons(
             "price": a['price_tiyns'] / 100,  # Convert to tenge
             "is_recurring": a['is_recurring'],
             "stackable": a['stackable'],
-            "features": a['features'],
+            "features": a['features'] or [],
             "extra_limits": a['extra_limits'],
         }
         for a in addons
