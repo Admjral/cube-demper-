@@ -386,11 +386,22 @@ class KaspiMCService:
             "operationName": "getOrdersForSync"
         }
 
+        # Format cookies as dict for httpx (same as _get_merchant_info in auth service)
+        cookies_dict = {}
+        if isinstance(cookies, list):
+            for c in cookies:
+                if isinstance(c, dict) and c.get('name') and c.get('value'):
+                    cookies_dict[c['name']] = c['value']
+        elif isinstance(cookies, dict):
+            cookies_dict = cookies
+
         headers = {
             "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Cookie": self._format_cookies_header(cookies),
-            "Origin": "https://mc.shop.kaspi.kz",
+            "Accept": "application/json, text/plain, */*",
+            "x-auth-version": "3",
+            "Origin": "https://kaspi.kz",
+            "Referer": "https://kaspi.kz/",
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/134.0.0.0 Safari/537.36",
         }
 
         try:
@@ -399,6 +410,7 @@ class KaspiMCService:
                     f"{self.MC_GRAPHQL_URL}?opName=getOrdersForSync",
                     json=payload,
                     headers=headers,
+                    cookies=cookies_dict,
                 )
 
                 if response.status_code != 200:
