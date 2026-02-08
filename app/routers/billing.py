@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Annotated
 import asyncpg
+import json
 import uuid
 import logging
 from datetime import datetime, timedelta
@@ -323,7 +324,7 @@ async def get_plans_v2(
             "price": p['price_tiyns'] / 100,  # Convert to tenge
             "analytics_limit": p['analytics_limit'],
             "demping_limit": p['demping_limit'],
-            "features": p['features'] or [],
+            "features": json.loads(p['features']) if isinstance(p['features'], str) else (p['features'] or []),
             "trial_days": p['trial_days'],
         }
         for p in plans
@@ -353,8 +354,8 @@ async def get_addons(
             "price": a['price_tiyns'] / 100,  # Convert to tenge
             "is_recurring": a['is_recurring'],
             "stackable": a['stackable'],
-            "features": a['features'] or [],
-            "extra_limits": a['extra_limits'],
+            "features": json.loads(a['features']) if isinstance(a['features'], str) else (a['features'] or []),
+            "extra_limits": json.loads(a['extra_limits']) if isinstance(a['extra_limits'], str) else a['extra_limits'],
         }
         for a in addons
     ]
