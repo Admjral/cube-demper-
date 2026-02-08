@@ -351,7 +351,7 @@ class KaspiMCService:
         query getOrdersForSync {
             merchant(id: "%s") {
                 orders {
-                    orders(input: { presetFilter: COMPLETED, page: 0, size: 50 }) {
+                    orders(input: { presetFilter: ARCHIVE, page: 0, size: 50 }) {
                         __typename
                     }
                 }
