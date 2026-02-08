@@ -346,20 +346,13 @@ class KaspiMCService:
 
         cookies = session.get('cookies', [])
 
-        # Try Spring Data GraphQL pagination format
+        # MC GraphQL requires presetFilter in input
         query = """
         query getOrdersForSync {
             merchant(id: "%s") {
                 orders {
-                    orders(input: { page: 0, size: 50 }) {
-                        content {
-                            code
-                            state
-                            creationDate
-                            totalPrice
-                        }
-                        totalElements
-                        totalPages
+                    orders(input: { presetFilter: COMPLETED, page: 0, size: 50 }) {
+                        __typename
                     }
                 }
             }
