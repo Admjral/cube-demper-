@@ -1519,34 +1519,24 @@ async def sync_store_orders(
 
 
 async def _sync_store_orders_task(store_id: str, merchant_id: str, days_back: int = 30):
-    """Background task to sync store orders from Kaspi API"""
-    from ..services.api_parser import fetch_orders, sync_orders_to_db
-    from ..services.kaspi_auth_service import get_active_session_with_refresh
+    """Background task to sync store orders from Kaspi MC GraphQL"""
+    from ..services.api_parser import sync_orders_to_db
+    from ..services.kaspi_mc_service import get_kaspi_mc_service, KaspiMCError
 
     try:
         logger.info(f"Starting orders sync for store {store_id}, merchant {merchant_id}")
 
-        # Get session with auto-refresh
-        session = await get_active_session_with_refresh(merchant_id)
-        if not session:
-            logger.error(f"No valid session for merchant {merchant_id}")
-            return
-
-        # Fetch completed orders from Kaspi
-        orders = await fetch_orders(
-            merchant_id=merchant_id,
-            session=session,
-            status="ARCHIVE",  # Completed orders
-            days_back=days_back
-        )
+        mc = get_kaspi_mc_service()
+        orders = await mc.fetch_orders_for_sync(merchant_id=merchant_id, limit=200)
 
         if orders:
-            # Sync to database
             result = await sync_orders_to_db(store_id, orders)
             logger.info(f"Orders sync complete for store {store_id}: {result}")
         else:
             logger.info(f"No orders found for store {store_id}")
 
+    except KaspiMCError as e:
+        logger.error(f"MC error syncing orders for store {store_id}: {e}")
     except Exception as e:
         logger.error(f"Error syncing orders for store {store_id}: {e}")
 

@@ -10,6 +10,7 @@ Kaspi MC (Merchant Cabinet) Service - парсинг данных через Gra
 """
 import logging
 import asyncio
+import uuid as uuid_module
 from typing import Optional, Dict, Any, List
 from datetime import datetime
 import json
@@ -19,7 +20,7 @@ import asyncpg
 
 from ..config import settings
 from ..core.database import get_db_pool
-from .kaspi_auth_service import get_active_session, KaspiAuthError
+from .kaspi_auth_service import get_active_session, get_active_session_with_refresh, KaspiAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -41,6 +42,20 @@ class KaspiMCService:
 
     def __init__(self, timeout: float = 30.0):
         self.timeout = timeout
+
+    async def _get_session_for_store(self, user_id: str, store_id: str, pool: asyncpg.Pool) -> dict:
+        """Get active session by looking up merchant_id from store_id"""
+        async with pool.acquire() as conn:
+            store = await conn.fetchrow(
+                "SELECT merchant_id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+                uuid_module.UUID(store_id), uuid_module.UUID(user_id)
+            )
+            if not store:
+                raise KaspiMCError("Store not found")
+        session = await get_active_session(store['merchant_id'])
+        if not session:
+            raise KaspiMCError("No active Kaspi session. Please login first.")
+        return session
 
     def _format_cookies_header(self, cookies: list) -> str:
         """Format cookies list to Cookie header string"""
@@ -73,11 +88,7 @@ class KaspiMCService:
             Dict с данными покупателя: {phone, first_name, last_name}
         """
         # Получаем активную сессию для магазина
-        session = await get_active_session(user_id, store_id, pool)
-
-        if not session:
-            logger.warning(f"No active Kaspi session for store {store_id}")
-            raise KaspiMCError("No active Kaspi session. Please login first.")
+        session = await self._get_session_for_store(user_id, store_id, pool)
 
         # Получаем merchant_uid из сессии
         merchant_uid = session.get('merchant_uid')
@@ -223,10 +234,7 @@ class KaspiMCService:
         Returns:
             Список заказов с базовой информацией
         """
-        session = await get_active_session(user_id, store_id, pool)
-
-        if not session:
-            raise KaspiMCError("No active Kaspi session")
+        session = await self._get_session_for_store(user_id, store_id, pool)
 
         merchant_uid = session.get('merchant_uid')
         if not merchant_uid:
@@ -315,6 +323,185 @@ class KaspiMCService:
 
         except httpx.RequestError as e:
             logger.error(f"HTTP error fetching orders: {e}")
+            raise KaspiMCError(f"Network error: {str(e)}")
+
+    async def fetch_orders_for_sync(
+        self,
+        merchant_id: str,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fetch orders via MC GraphQL for sync_orders_to_db.
+
+        Returns data in the same format as Kaspi Open API so that
+        parse_order_details() and sync_orders_to_db() work without changes.
+        """
+        session = await get_active_session_with_refresh(merchant_id)
+        if not session:
+            raise KaspiMCError(f"No active session for merchant {merchant_id}")
+
+        merchant_uid = session.get('merchant_uid')
+        if not merchant_uid:
+            raise KaspiMCError("Merchant UID not found in session")
+
+        cookies = session.get('cookies', [])
+
+        query = """
+        query getOrdersForSync($first: Int!) {
+            merchant(id: "%s") {
+                orders(first: $first) {
+                    edges {
+                        node {
+                            code
+                            state
+                            createdAt
+                            totalPrice
+                            customer {
+                                phoneNumber
+                                firstName
+                                lastName
+                            }
+                            entries {
+                                productName
+                                quantity
+                                basePrice
+                            }
+                            deliveryAddress {
+                                city
+                                street
+                                building
+                                apartment
+                            }
+                        }
+                    }
+                    totalCount
+                }
+            }
+        }
+        """ % merchant_uid
+
+        payload = {
+            "query": query,
+            "variables": {"first": limit},
+            "operationName": "getOrdersForSync"
+        }
+
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json",
+            "Cookie": self._format_cookies_header(cookies),
+            "Origin": "https://mc.shop.kaspi.kz",
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                response = await client.post(
+                    f"{self.MC_GRAPHQL_URL}?opName=getOrdersForSync",
+                    json=payload,
+                    headers=headers,
+                )
+
+                if response.status_code != 200:
+                    logger.error(f"MC GraphQL error: {response.status_code} - {response.text}")
+                    raise KaspiMCError(f"MC API error: {response.status_code}")
+
+                data = response.json()
+
+                if "errors" in data:
+                    error_msg = data["errors"][0].get("message", "Unknown error")
+                    logger.error(f"GraphQL error fetching orders for sync: {error_msg}")
+                    raise KaspiMCError(f"GraphQL error: {error_msg}")
+
+                orders_data = data.get("data", {}).get("merchant", {}).get("orders", {})
+                edges = orders_data.get("edges", [])
+                total = orders_data.get("totalCount", 0)
+
+                logger.info(f"MC GraphQL returned {len(edges)} orders (total: {total}) for merchant {merchant_id}")
+
+                # Convert to Open API compatible format for parse_order_details()
+                result = []
+                for edge in edges:
+                    node = edge.get("node", {})
+                    customer = node.get("customer", {}) or {}
+                    entries = node.get("entries", [])
+                    delivery = node.get("deliveryAddress", {}) or {}
+                    code = node.get("code", "")
+
+                    # Format phone
+                    raw_phone = customer.get("phoneNumber", "")
+                    if raw_phone:
+                        digits = "".join(filter(str.isdigit, raw_phone))
+                        if len(digits) == 11 and digits.startswith('7'):
+                            phone = digits
+                        elif len(digits) == 10:
+                            phone = f"7{digits}"
+                        else:
+                            phone = digits
+                    else:
+                        phone = ""
+
+                    # Format address
+                    addr_parts = []
+                    if delivery.get('city'):
+                        addr_parts.append(delivery['city'])
+                    if delivery.get('street'):
+                        addr_parts.append(delivery['street'])
+                    if delivery.get('building'):
+                        addr_parts.append(delivery['building'])
+                    formatted_addr = ", ".join(addr_parts) if addr_parts else ""
+
+                    # Format createdAt to timestamp ms
+                    created_at = node.get("createdAt")
+                    if isinstance(created_at, (int, float)):
+                        creation_ts = int(created_at)
+                    elif isinstance(created_at, str):
+                        try:
+                            dt = datetime.fromisoformat(created_at.replace("Z", "+00:00"))
+                            creation_ts = int(dt.timestamp() * 1000)
+                        except (ValueError, TypeError):
+                            creation_ts = int(datetime.utcnow().timestamp() * 1000)
+                    else:
+                        creation_ts = int(datetime.utcnow().timestamp() * 1000)
+
+                    # Build Open API compatible structure
+                    order = {
+                        "id": code,  # Use code as ID
+                        "attributes": {
+                            "code": code,
+                            "state": node.get("state", ""),
+                            "totalPrice": node.get("totalPrice", 0),
+                            "deliveryCost": 0,
+                            "deliveryMode": "",
+                            "paymentMode": "",
+                            "creationDate": creation_ts,
+                            "customer": {
+                                "firstName": customer.get("firstName", ""),
+                                "lastName": customer.get("lastName", ""),
+                                "cellPhone": phone,
+                            },
+                            "deliveryAddress": {
+                                "formattedAddress": formatted_addr,
+                            },
+                            "entries": [
+                                {
+                                    "product": {
+                                        "code": "",  # MC GraphQL doesn't provide product codes
+                                        "sku": "",
+                                        "name": e.get("productName", ""),
+                                    },
+                                    "quantity": e.get("quantity", 1),
+                                    "basePrice": e.get("basePrice", 0),
+                                }
+                                for e in entries
+                            ],
+                        },
+                    }
+                    result.append(order)
+
+                return result
+
+        except httpx.RequestError as e:
+            logger.error(f"HTTP error fetching orders for sync: {e}")
             raise KaspiMCError(f"Network error: {str(e)}")
 
 
