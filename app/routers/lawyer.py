@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from uuid import UUID
 import io
+import json
 
 from ..schemas.lawyer import (
     LawyerChatRequest, LawyerChatResponse,
@@ -229,8 +230,8 @@ async def generate_document(
                 INSERT INTO lawyer_documents (user_id, document_type, title, language, input_data, content)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id
-            """, current_user['id'], request.document_type.value, title, 
-                request.language.value, request.data, content)
+            """, current_user['id'], request.document_type.value, title,
+                request.language.value, json.dumps(request.data, ensure_ascii=False, default=str), content)
         
         return GenerateDocumentResponse(
             id=str(doc_id),
