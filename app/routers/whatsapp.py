@@ -1133,7 +1133,12 @@ async def create_session_new(
 
     if waha_plus:
         # WAHA Plus: unique session per user
-        session_name = request.name or f"user_{str(current_user['id'])[:8]}"
+        # Sanitize name: WAHA only accepts a-z, A-Z, 0-9, -, _
+        import re
+        raw_name = request.name or f"user_{str(current_user['id'])[:8]}"
+        session_name = re.sub(r'[^a-zA-Z0-9_-]', '', raw_name)
+        if not session_name:
+            session_name = f"user_{str(current_user['id'])[:8]}"
     else:
         # WAHA Core: only 'default' session supported
         session_name = "default"
@@ -1166,12 +1171,18 @@ async def create_session_new(
         try:
             result = await waha.create_session(session_name)
             logger.info(f"WAHA session created: {result}")
+        except WahaConnectionError as e:
+            logger.error(f"WAHA connection error: {e}")
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"WAHA service unavailable: {e.message}"
+            )
         except WahaError as e:
             # If session already exists in WAHA, that's OK - continue
             if "already exists" not in str(e).lower():
                 logger.error(f"WAHA session creation failed: {e}")
                 raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                    status_code=e.status_code or status.HTTP_400_BAD_REQUEST,
                     detail=f"Failed to create WAHA session: {e.message}"
                 )
 
