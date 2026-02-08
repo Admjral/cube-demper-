@@ -169,9 +169,23 @@ class KaspiMCService:
                 if delivery.get('apartment'):
                     address_parts.append(f"кв. {delivery['apartment']}")
 
+                # Форматируем телефон: Kaspi MC возвращает 10 цифр (без +7)
+                # но на всякий случай защищаемся от 11 цифр с ведущей 7
+                raw_phone = customer.get('phoneNumber', '')
+                if raw_phone:
+                    digits = "".join(filter(str.isdigit, raw_phone))
+                    if len(digits) == 11 and digits.startswith('7'):
+                        formatted_phone = f"+{digits}"
+                    elif len(digits) == 10:
+                        formatted_phone = f"+7{digits}"
+                    else:
+                        formatted_phone = f"+7{digits}"
+                else:
+                    formatted_phone = None
+
                 return {
-                    "phone": f"+7{customer.get('phoneNumber', '')}" if customer.get('phoneNumber') else None,
-                    "phone_raw": customer.get('phoneNumber'),
+                    "phone": formatted_phone,
+                    "phone_raw": raw_phone,
                     "first_name": customer.get('firstName'),
                     "last_name": customer.get('lastName'),
                     "full_name": f"{customer.get('firstName', '')} {customer.get('lastName', '')}".strip() or None,

@@ -322,9 +322,9 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                     """
                     INSERT INTO products (
                         store_id, kaspi_product_id, kaspi_sku, external_kaspi_id,
-                        name, price, availabilities, bot_active
+                        name, price, availabilities, bot_active, category
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, false)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, false, $8)
                     ON CONFLICT (store_id, kaspi_product_id)
                     DO UPDATE SET
                         name = $5,
@@ -332,6 +332,7 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                         availabilities = $7,
                         kaspi_sku = COALESCE($3, products.kaspi_sku),
                         external_kaspi_id = COALESCE($4, products.external_kaspi_id),
+                        category = COALESCE($8, products.category),
                         updated_at = NOW()
                     """,
                     uuid.UUID(store_id),
@@ -340,7 +341,8 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                     product_data.get('external_kaspi_id'),
                     product_data['name'],
                     product_data['price'],
-                    availabilities
+                    availabilities,
+                    product_data.get('category'),
                 )
 
             # Update store products count and last sync

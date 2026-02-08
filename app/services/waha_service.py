@@ -349,13 +349,8 @@ class WahaService:
         Returns:
             Chat ID (77001234567@c.us)
         """
-        # Убираем все нецифровые символы
+        # Убираем все нецифровые символы (включая +)
         phone_clean = "".join(filter(str.isdigit, phone))
-        
-        # Убираем начальный + если есть
-        if phone_clean.startswith("+"):
-            phone_clean = phone_clean[1:]
-            
         return f"{phone_clean}@c.us"
 
     async def send_text(

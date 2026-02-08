@@ -1046,6 +1046,13 @@ async def sync_orders_to_db(
                                 entry["price"],
                             )
 
+                            # Update sales_count for matched product
+                            if product:
+                                await conn.execute(
+                                    "UPDATE products SET sales_count = COALESCE(sales_count, 0) + $1 WHERE id = $2",
+                                    entry["quantity"], product["id"]
+                                )
+
                 except Exception as e:
                     logger.error(f"Error syncing order: {e}")
                     errors += 1

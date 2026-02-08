@@ -444,6 +444,17 @@ async def process_order_for_upsell(
             logger.info("AI disabled for store %s", order['store_id'])
             return None
 
+        # Проверяем дневной лимит сообщений
+        max_per_day = (shop_settings.get('ai_max_messages_per_day') or 50) if shop_settings else 50
+        today_count = await conn.fetchval("""
+            SELECT COUNT(*) FROM ai_salesman_messages
+            WHERE store_id = $1 AND created_at >= CURRENT_DATE
+        """, order['store_id'])
+
+        if today_count >= max_per_day:
+            logger.info("Daily message limit (%d) reached for store %s", max_per_day, order['store_id'])
+            return None
+
         # 6. Формируем контекст
         context = OrderContext(
             order_id=order_id,
@@ -477,6 +488,12 @@ async def process_order_for_upsell(
 
         # 8. Отправляем в WhatsApp если нужно
         if send_message and message.text:
+            # Валидация телефона: минимум 10 цифр
+            phone_digits = "".join(filter(str.isdigit, customer_phone))
+            if len(phone_digits) < 10:
+                logger.warning("Invalid phone number for order %s: %s", order_id, customer_phone)
+                return message
+
             try:
                 # Проверяем есть ли активная WhatsApp сессия у пользователя
                 wa_session = await conn.fetchrow("""
@@ -503,8 +520,8 @@ async def process_order_for_upsell(
                     # Сохраняем в историю
                     await conn.execute("""
                         INSERT INTO ai_salesman_messages
-                        (order_id, store_id, customer_phone, trigger_type, message_text, products_suggested)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        (order_id, store_id, customer_phone, trigger_type, message_text, products_suggested, sent_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW())
                     """, order_id, order['store_id'], customer_phone,
                         message.trigger.value, message.text, message.products_suggested)
 
