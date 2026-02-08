@@ -346,29 +346,29 @@ class KaspiMCService:
 
         cookies = session.get('cookies', [])
 
-        # Introspect Orders type to discover available fields
+        # Orders has nested: orders → OrdersPage, advancedOrders → OrdersPage
+        # Introspect OrdersPage and Order types
         query = """
         query getOrdersForSync {
             merchant(id: "%s") {
                 orders {
-                    __typename
-                    ... on Orders {
+                    orders {
                         __typename
                     }
                 }
             }
-            __type(name: "Orders") {
+            ordersPage: __type(name: "OrdersPage") {
                 name
                 fields {
                     name
-                    type {
-                        name
-                        kind
-                        ofType {
-                            name
-                            kind
-                        }
-                    }
+                    type { name kind ofType { name kind } }
+                }
+            }
+            order: __type(name: "Order") {
+                name
+                fields {
+                    name
+                    type { name kind ofType { name kind } }
                 }
             }
         }
@@ -414,7 +414,7 @@ class KaspiMCService:
                 data = response.json()
 
                 # Log raw response for debugging schema
-                logger.info(f"MC GraphQL raw response: {json.dumps(data, ensure_ascii=False, default=str)[:2000]}")
+                logger.info(f"MC GraphQL raw response: {json.dumps(data, ensure_ascii=False, default=str)[:5000]}")
 
                 if "errors" in data:
                     error_msg = data["errors"][0].get("message", "Unknown error")
