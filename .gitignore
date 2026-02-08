@@ -1,62 +1,22 @@
+# Large data files (exceed GitHub 100MB limit)
+analys-niches/data/*.json
+analys-niches/data/*.csv
+analys-niches/data/kaspi/
+
 # Python
 __pycache__/
 *.py[cod]
-*$py.class
-*.so
-.Python
-env/
+.venv/
 venv/
-ENV/
-build/
-develop-eggs/
-dist/
-downloads/
-eggs/
-.eggs/
-lib/
-lib64/
-parts/
-sdist/
-var/
-wheels/
-*.egg-info/
-.installed.cfg
-*.egg
-
-# Virtual environments
-venv/
-ENV/
-env/
-
-# IDEs
-.vscode/
-.idea/
-*.swp
-*.swo
-*~
-
-# OS
-.DS_Store
-Thumbs.db
-
-# Environment variables
 .env
 
-# Logs
-*.log
-logs/
+# Node
+node_modules/
+.next/
+dist/
 
-# Database
-*.db
-*.sqlite
-
-# Alembic
-alembic.ini.bak
-
-# Test coverage
-.coverage
-htmlcov/
-.pytest_cache/
-
-# Playwright
-playwright-state/
+# IDE
+.idea/
+.vscode/
+*.swp
+.DS_Store

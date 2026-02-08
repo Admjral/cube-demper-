@@ -1,0 +1,18 @@
+# Data Analysis
+pandas==2.2.0
+numpy==1.26.3
+openpyxl==3.1.2  # For Excel files
+
+# Machine Learning
+scikit-learn==1.4.0
+
+# Visualization (optional, for notebooks)
+matplotlib==3.8.2
+seaborn==0.13.2
+
+# Jupyter (for research)
+jupyter==1.0.0
+
+# Scraping
+playwright==1.48.0
+python-dotenv==1.0.1
