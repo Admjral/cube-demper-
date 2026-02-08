@@ -26,6 +26,16 @@ from ..core.circuit_breaker import get_kaspi_auth_circuit_breaker, CircuitOpenEr
 
 logger = logging.getLogger(__name__)
 
+# Per-merchant login locks to prevent concurrent Playwright logins for the same account
+_merchant_login_locks: dict[str, asyncio.Lock] = {}
+
+
+def _get_merchant_lock(merchant_id: str) -> asyncio.Lock:
+    """Get or create an asyncio Lock for a merchant to prevent concurrent logins."""
+    if merchant_id not in _merchant_login_locks:
+        _merchant_login_locks[merchant_id] = asyncio.Lock()
+    return _merchant_login_locks[merchant_id]
+
 
 class KaspiAuthError(Exception):
     """Base exception for Kaspi authentication errors"""
@@ -640,99 +650,127 @@ async def get_active_session_with_refresh(
 
             logger.info(f"Session for merchant {merchant_id} expired/invalid, attempting auto-refresh...")
 
-            # Get stored credentials - try separate columns first, then from session
-            email = row.get('kaspi_email') if row else None
-            password = row.get('kaspi_password') if row else None
+            # Use per-merchant lock to prevent concurrent Playwright logins
+            lock = _get_merchant_lock(merchant_id)
 
-            # Fallback to credentials from session data if available
-            if (not email or not password) and session_data:
-                email = email or session_data.get('email')
-                password = password or session_data.get('password')
+            if lock.locked():
+                # Another coroutine is already logging in — wait for it, then re-read from DB
+                logger.info(f"Login already in progress for merchant {merchant_id}, waiting...")
+                async with lock:
+                    pass  # just wait for the other login to finish
 
-            if not email or not password:
-                logger.error(f"No credentials stored for merchant {merchant_id}, cannot auto-refresh")
-                # Try to mark store as needing re-authentication (column may not exist)
-                try:
-                    await conn.execute(
-                        """
-                        UPDATE kaspi_stores
-                        SET needs_reauth = true, reauth_reason = 'credentials_missing', updated_at = NOW()
-                        WHERE merchant_id = $1
-                        """,
-                        merchant_id
-                    )
-                except Exception as e:
-                    logger.warning(f"Could not update needs_reauth (migration may be pending): {e}")
-                return None
-
-            try:
-                # Attempt to re-authenticate
-                new_session = await authenticate_kaspi(email, password, merchant_id)
-
-                # If successful, update database
-                await conn.execute(
-                    """
-                    UPDATE kaspi_stores
-                    SET guid = $1, needs_reauth = false, reauth_reason = NULL, updated_at = NOW()
-                    WHERE merchant_id = $2
-                    """,
-                    json.dumps({'encrypted': new_session['guid']}),
+                # Re-read the refreshed session from DB
+                refreshed_row = await conn.fetchrow(
+                    "SELECT guid FROM kaspi_stores WHERE merchant_id = $1 AND is_active = true",
                     merchant_id
                 )
+                if refreshed_row and refreshed_row['guid']:
+                    refreshed_data = None
+                    if isinstance(refreshed_row['guid'], dict) and 'encrypted' in refreshed_row['guid']:
+                        refreshed_data = decrypt_session(refreshed_row['guid']['encrypted'])
+                    elif isinstance(refreshed_row['guid'], str):
+                        refreshed_data = decrypt_session(refreshed_row['guid'])
+                    if refreshed_data:
+                        logger.info(f"Got refreshed session for merchant {merchant_id} from concurrent login")
+                        return refreshed_data
 
-                logger.info(f"Successfully refreshed session for merchant {merchant_id}")
-
-                # Return decrypted session
-                return decrypt_session(new_session['guid'])
-
-            except KaspiSMSRequiredError as e:
-                # SMS verification needed - mark store and notify
-                logger.warning(f"SMS verification required for merchant {merchant_id}")
-                try:
-                    await conn.execute(
-                        """
-                        UPDATE kaspi_stores
-                        SET needs_reauth = true, reauth_reason = 'sms_required', updated_at = NOW()
-                        WHERE merchant_id = $1
-                        """,
-                        merchant_id
-                    )
-                except Exception as upd_err:
-                    logger.warning(f"Could not update needs_reauth: {upd_err}")
+                logger.warning(f"Concurrent login for merchant {merchant_id} did not produce a valid session")
                 return None
 
-            except KaspiInvalidCredentialsError as e:
-                # Credentials no longer valid
-                logger.error(f"Invalid credentials for merchant {merchant_id}")
-                try:
-                    await conn.execute(
-                        """
-                        UPDATE kaspi_stores
-                        SET needs_reauth = true, reauth_reason = 'invalid_credentials', updated_at = NOW()
-                        WHERE merchant_id = $1
-                        """,
-                        merchant_id
-                    )
-                except Exception as upd_err:
-                    logger.warning(f"Could not update needs_reauth: {upd_err}")
-                return None
+            # We're the first — acquire lock and do the actual login
+            async with lock:
+                # Get stored credentials - try separate columns first, then from session
+                email = row.get('kaspi_email') if row else None
+                password = row.get('kaspi_password') if row else None
 
-            except KaspiAuthError as e:
-                # Other auth error
-                logger.error(f"Auth error for merchant {merchant_id}: {e}")
+                # Fallback to credentials from session data if available
+                if (not email or not password) and session_data:
+                    email = email or session_data.get('email')
+                    password = password or session_data.get('password')
+
+                if not email or not password:
+                    logger.error(f"No credentials stored for merchant {merchant_id}, cannot auto-refresh")
+                    try:
+                        await conn.execute(
+                            """
+                            UPDATE kaspi_stores
+                            SET needs_reauth = true, reauth_reason = 'credentials_missing', updated_at = NOW()
+                            WHERE merchant_id = $1
+                            """,
+                            merchant_id
+                        )
+                    except Exception as e:
+                        logger.warning(f"Could not update needs_reauth (migration may be pending): {e}")
+                    return None
+
                 try:
+                    # Attempt to re-authenticate
+                    new_session = await authenticate_kaspi(email, password, merchant_id)
+
+                    # If successful, update database
                     await conn.execute(
                         """
                         UPDATE kaspi_stores
-                        SET needs_reauth = true, reauth_reason = $1, updated_at = NOW()
+                        SET guid = $1, needs_reauth = false, reauth_reason = NULL, updated_at = NOW()
                         WHERE merchant_id = $2
                         """,
-                        str(e)[:200],
+                        json.dumps({'encrypted': new_session['guid']}),
                         merchant_id
                     )
-                except Exception as upd_err:
-                    logger.warning(f"Could not update needs_reauth: {upd_err}")
-                return None
+
+                    logger.info(f"Successfully refreshed session for merchant {merchant_id}")
+
+                    # Return decrypted session
+                    return decrypt_session(new_session['guid'])
+
+                except KaspiSMSRequiredError as e:
+                    # SMS verification needed - mark store and notify
+                    logger.warning(f"SMS verification required for merchant {merchant_id}")
+                    try:
+                        await conn.execute(
+                            """
+                            UPDATE kaspi_stores
+                            SET needs_reauth = true, reauth_reason = 'sms_required', updated_at = NOW()
+                            WHERE merchant_id = $1
+                            """,
+                            merchant_id
+                        )
+                    except Exception as upd_err:
+                        logger.warning(f"Could not update needs_reauth: {upd_err}")
+                    return None
+
+                except KaspiInvalidCredentialsError as e:
+                    # Credentials no longer valid
+                    logger.error(f"Invalid credentials for merchant {merchant_id}")
+                    try:
+                        await conn.execute(
+                            """
+                            UPDATE kaspi_stores
+                            SET needs_reauth = true, reauth_reason = 'invalid_credentials', updated_at = NOW()
+                            WHERE merchant_id = $1
+                            """,
+                            merchant_id
+                        )
+                    except Exception as upd_err:
+                        logger.warning(f"Could not update needs_reauth: {upd_err}")
+                    return None
+
+                except KaspiAuthError as e:
+                    # Other auth error
+                    logger.error(f"Auth error for merchant {merchant_id}: {e}")
+                    try:
+                        await conn.execute(
+                            """
+                            UPDATE kaspi_stores
+                            SET needs_reauth = true, reauth_reason = $1, updated_at = NOW()
+                            WHERE merchant_id = $2
+                            """,
+                            str(e)[:200],
+                            merchant_id
+                        )
+                    except Exception as upd_err:
+                        logger.warning(f"Could not update needs_reauth: {upd_err}")
+                    return None
 
     except Exception as e:
         logger.error(f"Error getting active session with refresh: {e}")
