@@ -346,13 +346,29 @@ class KaspiMCService:
 
         cookies = session.get('cookies', [])
 
-        # Use introspection-safe query: first try to discover the orders schema
-        # MC GraphQL orders type is not Relay-style (no edges/node)
+        # Introspect Orders type to discover available fields
         query = """
         query getOrdersForSync {
             merchant(id: "%s") {
                 orders {
                     __typename
+                    ... on Orders {
+                        __typename
+                    }
+                }
+            }
+            __type(name: "Orders") {
+                name
+                fields {
+                    name
+                    type {
+                        name
+                        kind
+                        ofType {
+                            name
+                            kind
+                        }
+                    }
                 }
             }
         }
