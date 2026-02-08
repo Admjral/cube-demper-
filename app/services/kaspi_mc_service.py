@@ -346,25 +346,31 @@ class KaspiMCService:
 
         cookies = session.get('cookies', [])
 
-        # Orders has nested: orders → OrdersPage, advancedOrders → OrdersPage
-        # Introspect OrdersPage and Order types
+        # Pure introspection query (no data, just schema)
         query = """
-        query getOrdersForSync {
-            merchant(id: "%s") {
-                orders {
-                    orders {
-                        __typename
-                    }
-                }
-            }
+        {
             ordersPage: __type(name: "OrdersPage") {
                 name
                 fields {
                     name
-                    type { name kind ofType { name kind } }
+                    type { name kind ofType { name kind ofType { name kind } } }
                 }
             }
             order: __type(name: "Order") {
+                name
+                fields {
+                    name
+                    type { name kind ofType { name kind ofType { name kind } } }
+                }
+            }
+            ordersInput: __type(name: "OrdersInput") {
+                name
+                inputFields {
+                    name
+                    type { name kind ofType { name kind } }
+                }
+            }
+            orderEntry: __type(name: "OrderEntry") {
                 name
                 fields {
                     name
@@ -372,7 +378,7 @@ class KaspiMCService:
                 }
             }
         }
-        """ % merchant_uid
+        """
 
         payload = {
             "query": query,
