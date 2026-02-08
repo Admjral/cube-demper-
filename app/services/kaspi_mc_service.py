@@ -346,39 +346,25 @@ class KaspiMCService:
 
         cookies = session.get('cookies', [])
 
-        # Pure introspection query (no data, just schema)
+        # Try Spring Data GraphQL pagination format
         query = """
-        {
-            ordersPage: __type(name: "OrdersPage") {
-                name
-                fields {
-                    name
-                    type { name kind ofType { name kind ofType { name kind } } }
-                }
-            }
-            order: __type(name: "Order") {
-                name
-                fields {
-                    name
-                    type { name kind ofType { name kind ofType { name kind } } }
-                }
-            }
-            ordersInput: __type(name: "OrdersInput") {
-                name
-                inputFields {
-                    name
-                    type { name kind ofType { name kind } }
-                }
-            }
-            orderEntry: __type(name: "OrderEntry") {
-                name
-                fields {
-                    name
-                    type { name kind ofType { name kind } }
+        query getOrdersForSync {
+            merchant(id: "%s") {
+                orders {
+                    orders(input: { page: 0, size: 50 }) {
+                        content {
+                            code
+                            state
+                            creationDate
+                            totalPrice
+                        }
+                        totalElements
+                        totalPages
+                    }
                 }
             }
         }
-        """
+        """ % merchant_uid
 
         payload = {
             "query": query,
