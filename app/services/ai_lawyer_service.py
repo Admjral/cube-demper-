@@ -10,6 +10,7 @@ Features:
 Uses Google Gemini for LLM and embeddings.
 """
 import logging
+import asyncio
 import asyncpg
 import json
 from typing import Optional, Dict, Any, List, Tuple
@@ -20,10 +21,13 @@ from dataclasses import dataclass
 import google.generativeai as genai
 
 from ..config import settings
+from ..core.circuit_breaker import get_circuit_breaker, CircuitBreakerConfig, CircuitOpenError
 from ..schemas.lawyer import (
     LawyerLanguage, DocumentType, TaxType, RiskLevel,
     ContractRisk, TaxCalculationItem
 )
+
+GEMINI_TIMEOUT = 30  # seconds
 
 logger = logging.getLogger(__name__)
 
@@ -678,21 +682,31 @@ class AILawyerService:
                     for h in history
                 ]
         
-        # Generate response
+        # Generate response with timeout and circuit breaker
+        breaker = get_gemini_circuit_breaker()
         try:
-            model = self._get_model(system_prompt)
-            chat = model.start_chat(history=messages)
-            
-            response = await chat.send_message_async(
-                message,
-                generation_config=genai.GenerationConfig(
-                    max_output_tokens=settings.gemini_max_tokens,
-                    temperature=0.7,
+            async with breaker:
+                model = self._get_model(system_prompt)
+                chat = model.start_chat(history=messages)
+
+                response = await asyncio.wait_for(
+                    chat.send_message_async(
+                        message,
+                        generation_config=genai.GenerationConfig(
+                            max_output_tokens=settings.gemini_max_tokens,
+                            temperature=0.7,
+                        )
+                    ),
+                    timeout=GEMINI_TIMEOUT,
                 )
-            )
-            
-            return response.text, sources
-            
+
+                return response.text, sources
+        except CircuitOpenError:
+            logger.warning("Gemini circuit breaker is open, rejecting request")
+            raise Exception("AI service temporarily unavailable. Please try again later.")
+        except asyncio.TimeoutError:
+            logger.error(f"Gemini API timeout after {GEMINI_TIMEOUT}s")
+            raise Exception("AI service response timed out. Please try again.")
         except Exception as e:
             logger.error(f"Gemini API error: {e}")
             raise
@@ -709,21 +723,32 @@ class AILawyerService:
         """
         prompt = CONTRACT_ANALYSIS_PROMPT.format(contract_text=contract_text[:15000])
         
+        breaker = get_gemini_circuit_breaker()
         try:
-            model = self._get_model()
-            response = await model.generate_content_async(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    max_output_tokens=4000,
-                    temperature=0.3,
-                    response_mime_type="application/json"
+            async with breaker:
+                model = self._get_model()
+                response = await asyncio.wait_for(
+                    model.generate_content_async(
+                        prompt,
+                        generation_config=genai.GenerationConfig(
+                            max_output_tokens=4000,
+                            temperature=0.3,
+                            response_mime_type="application/json"
+                        )
+                    ),
+                    timeout=GEMINI_TIMEOUT,
                 )
-            )
-            
+
             # Parse JSON response
             result = json.loads(response.text)
             return result
-            
+
+        except CircuitOpenError:
+            logger.warning("Gemini circuit breaker is open, rejecting contract analysis")
+            raise Exception("AI service temporarily unavailable. Please try again later.")
+        except asyncio.TimeoutError:
+            logger.error(f"Gemini contract analysis timeout after {GEMINI_TIMEOUT}s")
+            raise Exception("AI service response timed out. Please try again.")
         except json.JSONDecodeError:
             # If JSON parsing fails, return basic structure
             logger.error("Failed to parse contract analysis JSON")
@@ -1108,6 +1133,16 @@ class AILawyerService:
 Минимум: 1 МРП = {mrp:,} тенге
 
 Итого госпошлина: {fee:,} тенге""".replace(',', ' ')
+
+
+def get_gemini_circuit_breaker():
+    """Get circuit breaker for Gemini API calls."""
+    return get_circuit_breaker("gemini_api", CircuitBreakerConfig(
+        failure_threshold=3,
+        success_threshold=1,
+        timeout_seconds=60.0,
+        half_open_max_calls=1,
+    ))
 
 
 # Singleton instance

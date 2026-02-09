@@ -78,40 +78,47 @@ async def _run_sync_cycle(pool: asyncpg.Pool):
     total_synced = 0
     total_errors = 0
 
-    for store in stores:
+    sem = asyncio.Semaphore(5)
+
+    async def _sync_one(store):
+        nonlocal total_synced, total_errors
+
         store_id = str(store['id'])
         merchant_id = store['merchant_id']
         store_name = store['name'] or merchant_id
 
-        try:
-            orders = await mc.fetch_orders_for_sync(
-                merchant_id=merchant_id,
-                limit=200,
-            )
-
-            if orders:
-                result = await sync_orders_to_db(store_id, orders)
-                synced = result.get('inserted', 0) + result.get('updated', 0)
-                total_synced += synced
-                logger.info(
-                    f"[ORDERS_SYNC] {store_name}: {synced} orders "
-                    f"({result.get('inserted', 0)} new, {result.get('updated', 0)} updated)"
+        async with sem:
+            try:
+                orders = await mc.fetch_orders_for_sync(
+                    merchant_id=merchant_id,
+                    limit=200,
                 )
-            else:
-                logger.debug(f"[ORDERS_SYNC] {store_name}: no active orders")
 
-        except KaspiMCError as e:
-            total_errors += 1
-            logger.warning(f"[ORDERS_SYNC] {store_name}: MC error - {e}")
-        except KaspiAuthError as e:
-            total_errors += 1
-            logger.warning(f"[ORDERS_SYNC] {store_name}: auth error - {e}")
-        except Exception as e:
-            total_errors += 1
-            logger.error(f"[ORDERS_SYNC] {store_name}: unexpected error - {e}")
+                if orders:
+                    result = await sync_orders_to_db(store_id, orders)
+                    synced = result.get('inserted', 0) + result.get('updated', 0)
+                    total_synced += synced
+                    logger.info(
+                        f"[ORDERS_SYNC] {store_name}: {synced} orders "
+                        f"({result.get('inserted', 0)} new, {result.get('updated', 0)} updated)"
+                    )
+                else:
+                    logger.debug(f"[ORDERS_SYNC] {store_name}: no active orders")
 
-        # Delay between stores to spread load
-        await asyncio.sleep(STORE_DELAY)
+            except KaspiMCError as e:
+                total_errors += 1
+                logger.warning(f"[ORDERS_SYNC] {store_name}: MC error - {e}")
+            except KaspiAuthError as e:
+                total_errors += 1
+                logger.warning(f"[ORDERS_SYNC] {store_name}: auth error - {e}")
+            except Exception as e:
+                total_errors += 1
+                logger.error(f"[ORDERS_SYNC] {store_name}: unexpected error - {e}")
+
+            # Delay between stores to spread load
+            await asyncio.sleep(STORE_DELAY)
+
+    await asyncio.gather(*[_sync_one(s) for s in stores])
 
     elapsed = (datetime.utcnow() - cycle_start).total_seconds()
     logger.info(

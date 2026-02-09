@@ -39,6 +39,20 @@ def log_step(step_name: str, start_time: float) -> float:
     return time.time()
 
 
+async def _safe_background_task(coro_func, *args, name="task", restart_delay=60):
+    """Wrapper that restarts background tasks on crash. For long-running tasks only."""
+    while True:
+        try:
+            await coro_func(*args)
+            break  # If coroutine completes normally, exit
+        except asyncio.CancelledError:
+            logger.info(f"[BG] {name} cancelled")
+            break
+        except Exception as e:
+            logger.error(f"[BG] {name} crashed: {e}, restarting in {restart_delay}s")
+            await asyncio.sleep(restart_delay)
+
+
 async def verify_playwright_background():
     """Verify Playwright in background (non-blocking)"""
     try:
@@ -84,10 +98,12 @@ async def lifespan(app: FastAPI):
         pool = await get_db_pool()
         asyncio.create_task(load_legal_docs_background(pool))
 
-        # Start periodic orders sync in background (every 60 min)
+        # Start periodic orders sync in background (every 60 min, auto-restart on crash)
         logger.info("[STARTUP] Starting periodic orders sync in background...")
         from .services.orders_sync_service import periodic_orders_sync
-        asyncio.create_task(periodic_orders_sync(pool))
+        asyncio.create_task(_safe_background_task(
+            periodic_orders_sync, pool, name="orders_sync", restart_delay=60
+        ))
 
         total_elapsed = time.time() - total_start
         logger.info(f"[STARTUP] ✅ Application ready in {total_elapsed:.2f}s")

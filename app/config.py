@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import model_validator
 from typing import Optional
 
 
@@ -29,7 +30,7 @@ class Settings(BaseSettings):
     postgres_db: str = "cube_demper"
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
-    db_pool_min_size: Optional[int] = 2  # Reduced for faster startup
+    db_pool_min_size: Optional[int] = 5  # Balance between startup speed and availability
     db_pool_max_size: Optional[int] = 50
 
     @property
@@ -70,7 +71,7 @@ class Settings(BaseSettings):
     sync_stores_mode: str = "leader"  # "leader" or "shard"
 
     # Browser Farm
-    browser_shards: int = 2
+    browser_shards: int = 4
     max_concurrency_per_proxy: int = 8
     request_timeout_ms: int = 15000
     idle_context_ttl: int = 300
@@ -125,6 +126,14 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_file: str = "logs/app.log"
+
+    @model_validator(mode='after')
+    def validate_secrets(self):
+        if 'change-in-production' in self.secret_key:
+            raise ValueError("SECRET_KEY must be set via environment variable")
+        if 'fernet-compatible' in self.encryption_key:
+            raise ValueError("ENCRYPTION_KEY must be set via environment variable")
+        return self
 
 
 settings = Settings()

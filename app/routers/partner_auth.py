@@ -2,6 +2,7 @@
 
 from fastapi import APIRouter, Depends, Query
 from typing import Annotated, Optional
+from pydantic import BaseModel, EmailStr, Field
 import asyncpg
 from datetime import timedelta, datetime
 import uuid
@@ -14,20 +15,27 @@ from ..dependencies import get_current_partner
 router = APIRouter()
 
 
+class PartnerLoginRequest(BaseModel):
+    email: EmailStr
+    password: str = Field(min_length=1)
+
+
+class PayoutRequest(BaseModel):
+    amount: float = Field(gt=0)
+    requisites: str = Field(min_length=1)
+
+
 @router.post("/login")
 async def partner_login(
-    credentials: dict,
+    credentials: PartnerLoginRequest,
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
 ):
   """
   Логин партнёра по email и паролю.
   Возвращает JWT-токен, который используется в partner-cabinet.
   """
-  email = credentials.get("email")
-  password = credentials.get("password")
-
-  if not email or not password:
-    raise AuthenticationError("Email и пароль обязательны")
+  email = credentials.email
+  password = credentials.password
 
   async with pool.acquire() as conn:
     partner = await conn.fetchrow(
@@ -243,7 +251,7 @@ async def partner_transactions(
 
 @router.post("/payout")
 async def request_payout(
-    request: dict,
+    payout: PayoutRequest,
     current_partner: Annotated[dict, Depends(get_current_partner)],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
 ):
@@ -251,14 +259,11 @@ async def request_payout(
   Запрос на выплату партнёру.
   """
   partner_id = current_partner["id"]
-  amount = request.get("amount")
-  requisites = request.get("requisites")
+  amount = payout.amount
+  requisites = payout.requisites
 
-  if not amount or amount < 5000:
+  if amount < 5000:
     raise AuthenticationError("Минимальная сумма выплаты: 5000 тенге")
-
-  if not requisites:
-    raise AuthenticationError("Укажите реквизиты для выплаты")
 
   async with pool.acquire() as conn:
     # Проверяем доступный баланс

@@ -1,7 +1,9 @@
 """Authentication router - handles user registration, login, password management, and phone OTP verification"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from typing import Annotated
+from collections import defaultdict
+from time import time
 import asyncpg
 import uuid
 import random
@@ -30,6 +32,19 @@ from ..config import settings
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+# In-memory rate limiting for auth endpoints
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+_register_attempts: dict[str, list[float]] = defaultdict(list)
+
+
+def _check_rate_limit(store: dict, key: str, max_attempts: int, window: int):
+    """Check IP-based rate limit. Raises 429 if exceeded."""
+    now = time()
+    store[key] = [t for t in store[key] if now - t < window]
+    if len(store[key]) >= max_attempts:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please try again later.")
+    store[key].append(now)
 
 
 async def _send_otp(conn, user_id: uuid.UUID, phone: str):
@@ -64,10 +79,12 @@ async def _send_otp(conn, user_id: uuid.UUID, phone: str):
 
 @router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 async def register(
+    request: Request,
     user_data: UserRegister,
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """Register a new user and return JWT token"""
+    _check_rate_limit(_register_attempts, request.client.host, max_attempts=3, window=60)
     async with pool.acquire() as conn:
         # Check if user already exists
         existing_user = await conn.fetchrow(
@@ -128,10 +145,12 @@ async def register(
 
 @router.post("/login", response_model=Token)
 async def login(
+    request: Request,
     credentials: UserLogin,
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """Login user and return JWT token"""
+    _check_rate_limit(_login_attempts, request.client.host, max_attempts=5, window=60)
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT id, email, password_hash, role, is_blocked FROM users WHERE email = $1",
