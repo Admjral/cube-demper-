@@ -30,6 +30,7 @@ class FeatureAccessService:
 
     # Plan names for upgrade messages
     PLAN_NAMES = {
+        'free': 'Бесплатный',
         'basic': 'Базовый',
         'standard': 'Стандарт',
         'premium': 'Премиум',

@@ -97,13 +97,19 @@ async def register(
             user_data.phone
         )
 
-        # Create free subscription for new user
+        # Create free subscription for new user (with plan_id pointing to free plan)
+        free_plan_id = await conn.fetchval(
+            "SELECT id FROM plans WHERE code = 'free' AND is_active = true"
+        )
         await conn.execute(
             """
-            INSERT INTO subscriptions (user_id, plan, status, products_limit, current_period_start, current_period_end)
-            VALUES ($1, 'free', 'active', $2, NOW(), NOW() + INTERVAL '1 year')
+            INSERT INTO subscriptions (user_id, plan, plan_id, status, products_limit,
+                                       analytics_limit, demping_limit,
+                                       current_period_start, current_period_end)
+            VALUES ($1, 'free', $2, 'active', $3, 0, 0, NOW(), NOW() + INTERVAL '1 year')
             """,
             user['id'],
+            free_plan_id,
             settings.plan_free_products_limit
         )
 

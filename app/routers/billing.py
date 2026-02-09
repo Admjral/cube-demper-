@@ -312,7 +312,7 @@ async def get_plans_v2(
             SELECT id, code, name, price_tiyns, analytics_limit, demping_limit,
                    features, trial_days, display_order
             FROM plans
-            WHERE is_active = true
+            WHERE is_active = true AND code != 'free'
             ORDER BY display_order
         """)
 
