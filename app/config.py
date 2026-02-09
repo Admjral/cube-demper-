@@ -92,6 +92,7 @@ class Settings(BaseSettings):
     waha_webhook_url: Optional[str] = None  # Will use {backend_url}/whatsapp/webhook if not set
     waha_enabled: bool = True  # Enable WAHA by default for Docker deployment
     waha_plus: bool = True  # WAHA Plus activated (supports multiple sessions, NOWEB engine)
+    waha_otp_session: str = "user_c49e4cfb"  # WAHA session for OTP codes (system number)
 
     # Railway Integration (optional, for per-user WAHA containers)
     railway_api_token: Optional[str] = None
