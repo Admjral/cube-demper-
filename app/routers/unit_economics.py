@@ -280,8 +280,13 @@ class CalculationResult(BaseModel):
 
     # Commission
     category: str
-    commission_rate: float
-    commission_amount: float
+    commission_rate: float       # Base rate (e.g. 10.9%)
+    commission_effective_rate: float  # Effective rate after НДС (e.g. 12.2%)
+    commission_amount: float     # Actual amount deducted (with НДС)
+
+    # Kaspi Pay
+    kaspi_pay_rate: float        # 0.95%
+    kaspi_pay_amount: float
 
     # Tax
     tax_regime: str
@@ -306,6 +311,7 @@ class ProductParseResult(BaseModel):
     price: Optional[float] = None
     category: Optional[str] = None
     subcategory: Optional[str] = None
+    weight_kg: Optional[float] = None
     image_url: Optional[str] = None
     kaspi_url: str
     success: bool
@@ -416,18 +422,37 @@ async def get_tax_regimes():
     return TAX_REGIMES
 
 
+KASPI_PAY_RATE = 0.95  # Kaspi Pay fee: 0.95% of selling price
+VAT_RATE = 12.0  # НДС rate in Kazakhstan: 12%
+
+
 @router.post("/calculate", response_model=CalculationResult)
 async def calculate_unit_economics(request: CalculationRequest):
     """
     Calculate full unit economics with all delivery scenarios
     """
-    # Get commission rate
-    commission_rate, _, _ = get_commission_rate(
+    # Get base commission rate
+    base_commission_rate, no_vat_rate, with_vat_rate = get_commission_rate(
         request.category,
         request.subcategory,
         request.use_vat
     )
-    commission_amount = request.selling_price * (commission_rate / 100)
+
+    # Kaspi ALWAYS adds 12% НДС on top of the commission.
+    # - For non-VAT payers (use_vat=False): base rate + 12% НДС = effective rate
+    #   (seller cannot reclaim НДС, so it's a real cost)
+    # - For VAT payers (use_vat=True): commission_with_vat already includes НДС
+    if request.use_vat:
+        # VAT payer: rate already includes НДС
+        effective_commission_rate = base_commission_rate
+    else:
+        # Non-VAT payer: Kaspi adds 12% НДС on top
+        effective_commission_rate = round(base_commission_rate * (1 + VAT_RATE / 100), 2)
+
+    commission_amount = request.selling_price * (effective_commission_rate / 100)
+
+    # Kaspi Pay fee (separate from marketplace commission)
+    kaspi_pay_amount = request.selling_price * (KASPI_PAY_RATE / 100)
 
     # Get tax rate
     tax_data = TAX_REGIMES.get(request.tax_regime, TAX_REGIMES["none"])
@@ -438,6 +463,7 @@ async def calculate_unit_economics(request: CalculationRequest):
     base_costs = (
         request.purchase_price +
         commission_amount +
+        kaspi_pay_amount +
         tax_amount +
         request.packaging_cost +
         request.other_costs
@@ -474,8 +500,11 @@ async def calculate_unit_economics(request: CalculationRequest):
         selling_price=request.selling_price,
         purchase_price=request.purchase_price,
         category=request.category,
-        commission_rate=commission_rate,
+        commission_rate=base_commission_rate,
+        commission_effective_rate=effective_commission_rate,
         commission_amount=round(commission_amount, 2),
+        kaspi_pay_rate=KASPI_PAY_RATE,
+        kaspi_pay_amount=round(kaspi_pay_amount, 2),
         tax_regime=tax_data["name"],
         tax_rate=tax_rate,
         tax_amount=round(tax_amount, 2),
@@ -620,11 +649,43 @@ async def parse_kaspi_url(
             if img_match:
                 image_url = img_match.group(1)
 
+            # Extract weight from characteristics table
+            weight_kg = None
+            weight_patterns = [
+                # "Вес" ... "0.23 кг" or "230 г" in specs table
+                r'[Вв]ес[^<]*?</[^>]+>\s*<[^>]+>\s*([0-9.,]+)\s*(кг|г|kg|g)',
+                # JSON-like: "weight": "0.23" or "Вес": "1.5 кг"
+                r'"[Вв]ес":\s*"?([0-9.,]+)\s*(кг|г|kg|g)"?',
+                # Spec row: Вес ... 1.5 кг
+                r'[Вв]ес\s*(?:товара|брутто|нетто|,\s*кг)?\s*[:<]?\s*([0-9.,]+)\s*(кг|г|kg|g)',
+                # "weight":"0.228" in JSON data
+                r'"weight":\s*"?([0-9.,]+)"?',
+            ]
+            for pattern in weight_patterns:
+                w_match = re.search(pattern, html)
+                if w_match:
+                    try:
+                        value = float(w_match.group(1).replace(',', '.'))
+                        # Check if there's a unit group
+                        unit = w_match.group(2).lower() if w_match.lastindex >= 2 else 'kg'
+                        if unit in ('г', 'g'):
+                            weight_kg = round(value / 1000, 3)
+                        else:
+                            weight_kg = round(value, 3)
+                        # Sanity check: weight should be 0.01 - 100 kg
+                        if weight_kg < 0.01 or weight_kg > 100:
+                            weight_kg = None
+                        else:
+                            break
+                    except (ValueError, IndexError):
+                        continue
+
             return ProductParseResult(
                 product_name=product_name,
                 price=price,
                 category=category,
                 subcategory=subcategory,
+                weight_kg=weight_kg,
                 image_url=image_url,
                 kaspi_url=url,
                 success=True
@@ -671,8 +732,9 @@ async def quick_calculate(
     result = await calculate_unit_economics(request)
 
     return {
-        "commission_rate": result.commission_rate,
+        "commission_rate": result.commission_effective_rate,
         "commission": result.commission_amount,
+        "kaspi_pay": result.kaspi_pay_amount,
         "tax_rate": result.tax_rate,
         "tax": result.tax_amount,
         "scenarios": {
