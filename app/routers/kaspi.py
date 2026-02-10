@@ -196,6 +196,13 @@ async def authenticate_store(
             detail=str(e)
         )
 
+    except Exception as e:
+        logger.error(f"Unexpected error during Kaspi auth: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка аутентификации. Попробуйте позже."
+        )
+
 
 @router.post("/auth/verify-sms", status_code=status.HTTP_200_OK)
 async def verify_sms(
@@ -269,6 +276,16 @@ async def verify_sms(
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail=str(e)
+        )
+
+    except HTTPException:
+        raise
+
+    except Exception as e:
+        logger.error(f"Unexpected error during SMS verification: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Ошибка верификации SMS. Попробуйте позже."
         )
 
 
