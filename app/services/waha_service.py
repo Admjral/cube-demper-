@@ -336,6 +336,30 @@ class WahaService:
             status_code=response.status_code
         )
 
+    async def request_pairing_code(self, name: str = None, phone_number: str = None) -> str:
+        """
+        Запросить pairing code для подключения по номеру телефона.
+
+        Args:
+            name: Имя сессии
+            phone_number: Номер телефона (77001234567 или +77001234567)
+
+        Returns:
+            Pairing code (например "XXXX-XXXX")
+        """
+        session_name = name or self.config.default_session
+        phone_clean = "".join(filter(str.isdigit, phone_number or ""))
+
+        logger.info(f"Requesting pairing code for session {session_name}, phone {phone_clean}")
+
+        result = await self._request(
+            "POST",
+            f"/api/{session_name}/auth/request-code",
+            json_data={"phoneNumber": int(phone_clean)},
+        )
+
+        return result.get("code", "")
+
     # ==================== MESSAGING ====================
 
     @staticmethod

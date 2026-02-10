@@ -95,6 +95,18 @@ async def authenticate_store(
         - Success: { "status": "success", "store_id": "...", "merchant_id": "..." }
         - SMS Required: { "status": "sms_required", "merchant_id": "..." }
     """
+    # Check store limit: 1 store per account
+    async with pool.acquire() as conn:
+        store_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM kaspi_stores WHERE user_id = $1 AND is_active = TRUE",
+            current_user['id']
+        )
+        if store_count >= 1:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Лимит магазинов: 1 магазин на аккаунт"
+            )
+
     try:
         # Attempt authentication
         session_data = await authenticate_kaspi(

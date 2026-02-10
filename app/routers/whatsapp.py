@@ -1296,6 +1296,51 @@ async def get_session_qr_by_id(
             raise HTTPException(status_code=500, detail=str(e))
 
 
+class PairPhoneRequest(BaseModel):
+    phone_number: str
+
+
+@router.post("/sessions/{session_id}/pair-phone")
+async def pair_by_phone(
+    session_id: str,
+    request: PairPhoneRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    waha: Annotated[WahaService, Depends(get_waha)],
+):
+    """
+    Получить pairing code для подключения WhatsApp по номеру телефона.
+    """
+    try:
+        session_uuid = UUID(session_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid session_id format")
+
+    async with pool.acquire() as conn:
+        session = await conn.fetchrow(
+            "SELECT session_name, status FROM whatsapp_sessions WHERE id = $1 AND user_id = $2",
+            session_uuid, current_user['id']
+        )
+
+        if not session:
+            raise HTTPException(status_code=404, detail="Session not found")
+
+        session_name = session['session_name'] or 'default'
+
+        try:
+            code = await waha.request_pairing_code(session_name, request.phone_number)
+
+            await conn.execute(
+                "UPDATE whatsapp_sessions SET status = 'qr_pending', updated_at = NOW() WHERE id = $1",
+                session_uuid
+            )
+
+            return {"code": code, "status": "pairing_pending"}
+        except WahaError as e:
+            logger.error(f"Pairing code error: {e}")
+            raise HTTPException(status_code=500, detail=str(e.message))
+
+
 @router.delete("/sessions/{session_id}")
 async def delete_session_by_id(
     session_id: str,
