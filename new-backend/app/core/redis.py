@@ -50,6 +50,15 @@ async def get_redis() -> redis.Redis:
     return _redis_client
 
 
+# Default TTL values (seconds) for different key types
+DEFAULT_TTL = 3600          # 1 hour (general fallback)
+PROXY_TTL = 300             # 5 min
+SESSION_TTL = 86400         # 24 hours
+RATE_LIMIT_TTL = 120        # 2 min
+CACHE_TTL = 600             # 10 min
+WAHA_TTL = 3600             # 1 hour
+
+
 class RedisKeyspace:
     """Redis key namespaces for different data types"""
 

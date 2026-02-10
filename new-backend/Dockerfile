@@ -37,11 +37,17 @@ RUN playwright install chromium
 # Copy application code
 COPY . .
 
-# Create logs directory
-RUN mkdir -p logs
+# Create non-root user
+RUN useradd -m -r appuser && \
+    mkdir -p logs && \
+    chown -R appuser:appuser /app && \
+    mkdir -p /home/appuser/.cache && \
+    chown -R appuser:appuser /home/appuser
+
+USER appuser
 
 # Expose port
 EXPOSE 8010
 
 # Start command
-CMD ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8010"]
+CMD ["sh", "-c", "alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port ${PORT:-8010}"]

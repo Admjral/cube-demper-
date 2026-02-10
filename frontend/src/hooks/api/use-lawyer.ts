@@ -2,6 +2,7 @@
 
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
+import { authClient } from '@/lib/auth'
 import { useAuth } from '@/hooks/use-auth'
 
 // Types
@@ -247,7 +248,7 @@ export function useAnalyzeContract() {
       const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL}/ai/lawyer/analyze-contract?language=${params.language || 'ru'}`, {
         method: 'POST',
         headers: {
-          'Authorization': `Bearer ${localStorage.getItem('token')}`,
+          'Authorization': `Bearer ${authClient.getToken()}`,
         },
         body: formData,
       })

@@ -185,19 +185,22 @@ export function useAssignSubscription() {
       planCode,
       days,
       isTrial,
-      notes
+      notes,
+      endsAt
     }: {
       userId: string
       planCode: string
       days?: number
       isTrial?: boolean
       notes?: string
+      endsAt?: string  // ISO datetime
     }) =>
       api.post(`/admin/users/${userId}/subscription`, {
         plan_code: planCode,
         days: days ?? 30,
         is_trial: isTrial ?? false,
         notes,
+        ends_at: endsAt,
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminKeys.users() })
@@ -230,6 +233,21 @@ export function useAssignAddon() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: adminKeys.users() })
+      queryClient.invalidateQueries({ queryKey: [...adminKeys.all, 'user-subscription'] })
+    },
+  })
+}
+
+// Cancel user subscription
+export function useCancelSubscription() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: (userId: string) =>
+      api.post(`/admin/users/${userId}/subscription/cancel`, {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: adminKeys.users() })
+      queryClient.invalidateQueries({ queryKey: adminKeys.subscriptions() })
       queryClient.invalidateQueries({ queryKey: [...adminKeys.all, 'user-subscription'] })
     },
   })

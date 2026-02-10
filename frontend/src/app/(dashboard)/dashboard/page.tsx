@@ -2,9 +2,16 @@
 
 import { useStore } from "@/store/use-store"
 import { useStoreStats } from "@/hooks/api/use-dashboard"
+import { useFeatures, useActivateTrial } from "@/hooks/api/use-features"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
+import { Badge } from "@/components/ui/badge"
 import { Skeleton } from "@/components/ui/skeleton"
+import { planConfig, getDaysRemaining, getDaysColor, getDaysText } from "@/lib/features"
+import { cn } from "@/lib/utils"
+import { useT } from "@/lib/i18n"
+import { format } from "date-fns"
+import { ru } from "date-fns/locale"
 import {
   TrendingUp,
   TrendingDown,
@@ -16,39 +23,37 @@ import {
   AlertCircle,
   Store,
   Users,
+  BarChart3,
+  Zap,
+  CreditCard,
+  Sparkles,
+  Clock,
+  Loader2,
 } from "lucide-react"
 import Link from "next/link"
 
 const quickActions = [
   {
-    title: "Демпинг цен",
-    titleEn: "Price Bot",
-    description: "Управление ценовыми стратегиями",
-    descriptionEn: "Manage price strategies",
+    titleKey: "dashboard.priceBot",
+    descKey: "dashboard.priceBotDesc",
     href: "/dashboard/price-bot",
     icon: Bot,
   },
   {
-    title: "Аналитика продаж",
-    titleEn: "Sales Analytics",
-    description: "Детальная статистика",
-    descriptionEn: "Detailed statistics",
+    titleKey: "dashboard.salesAnalytics",
+    descKey: "dashboard.salesAnalyticsDesc",
     href: "/dashboard/sales",
     icon: TrendingUp,
   },
   {
-    title: "WhatsApp",
-    titleEn: "WhatsApp",
-    description: "Автоматизация сообщений",
-    descriptionEn: "Message automation",
+    titleKey: "dashboard.whatsapp",
+    descKey: "dashboard.whatsappDesc",
     href: "/dashboard/whatsapp",
     icon: Package,
   },
   {
-    title: "Реферальная программа",
-    titleEn: "Referral Program",
-    description: "Приглашай друзей и зарабатывай",
-    descriptionEn: "Invite friends and earn",
+    titleKey: "dashboard.referral",
+    descKey: "dashboard.referralDesc",
     href: "/partner",
     icon: Users,
   },
@@ -97,22 +102,21 @@ function StatsLoading() {
   )
 }
 
-function NoStoreSelected({ locale }: { locale: string }) {
+function NoStoreSelected() {
+  const t = useT()
   return (
     <Card className="glass-card">
       <CardContent className="p-8 text-center">
         <Store className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
         <h3 className="text-lg font-semibold mb-2">
-          {locale === 'ru' ? 'Выберите магазин' : 'Select a store'}
+          {t("dashboard.selectStore")}
         </h3>
         <p className="text-muted-foreground mb-4">
-          {locale === 'ru'
-            ? 'Для просмотра статистики выберите магазин в меню или добавьте новый'
-            : 'Select a store from the menu or add a new one to view statistics'}
+          {t("dashboard.selectStoreDesc")}
         </p>
         <Link href="/dashboard/integrations">
           <Button>
-            {locale === 'ru' ? 'Добавить магазин' : 'Add store'}
+            {t("dashboard.addStore")}
           </Button>
         </Link>
       </CardContent>
@@ -121,37 +125,36 @@ function NoStoreSelected({ locale }: { locale: string }) {
 }
 
 export default function DashboardPage() {
-  const { locale, selectedStore } = useStore()
+  const { selectedStore } = useStore()
   const { data: stats, isLoading, error } = useStoreStats(selectedStore?.id)
+  const { data: features } = useFeatures()
+  const activateTrial = useActivateTrial()
+  const t = useT()
 
   // Calculate stats with trends (comparing today vs week average)
   const statsCards = stats ? [
     {
-      title: "Продажи сегодня",
-      titleEn: "Sales today",
+      title: t("dashboard.salesToday"),
       value: formatCurrency(stats.today_revenue),
       change: calculateChange(stats.today_revenue, stats.week_revenue / 7),
       icon: ShoppingCart,
     },
     {
-      title: "Заказы сегодня",
-      titleEn: "Orders today",
+      title: t("dashboard.ordersToday"),
       value: formatNumber(stats.today_orders),
       change: calculateChange(stats.today_orders, stats.week_orders / 7),
       icon: Package,
     },
     {
-      title: "Средний чек",
-      titleEn: "Avg. order",
+      title: t("dashboard.avgOrder"),
       value: formatCurrency(stats.avg_order_value),
       change: { value: '', trend: 'up' as const },
       icon: DollarSign,
     },
     {
-      title: "Активный демпинг",
-      titleEn: "Active demping",
+      title: t("dashboard.activeDemping"),
       value: formatNumber(stats.demping_enabled_count),
-      change: { value: `из ${stats.products_count}`, trend: 'up' as const },
+      change: { value: `${t("dashboard.of")} ${stats.products_count}`, trend: 'up' as const },
       icon: Bot,
     },
   ] : []
@@ -161,17 +164,15 @@ export default function DashboardPage() {
       {/* Welcome */}
       <div>
         <h1 className="text-2xl font-semibold">
-          {locale === 'ru' ? 'Добро пожаловать' : 'Welcome'}
+          {t("dashboard.welcome")}
         </h1>
         <p className="text-muted-foreground">
-          {locale === 'ru'
-            ? `Обзор ${selectedStore?.name || 'магазина'}`
-            : `Overview of ${selectedStore?.name || 'store'}`}
+          {t("dashboard.overviewOf")} {selectedStore?.name || t("dashboard.store")}
         </p>
       </div>
 
       {/* No store selected */}
-      {!selectedStore && <NoStoreSelected locale={locale} />}
+      {!selectedStore && <NoStoreSelected />}
 
       {/* Loading state */}
       {selectedStore && isLoading && <StatsLoading />}
@@ -183,17 +184,15 @@ export default function DashboardPage() {
             <AlertCircle className="h-8 w-8 text-destructive" />
             <div>
               <h3 className="font-semibold">
-                {locale === 'ru' ? 'Ошибка загрузки' : 'Loading error'}
+                {t("dashboard.loadingError")}
               </h3>
               <p className="text-sm text-muted-foreground">
-                {locale === 'ru'
-                  ? 'Не удалось загрузить статистику. Попробуйте синхронизировать магазин.'
-                  : 'Failed to load statistics. Try syncing the store.'}
+                {t("dashboard.loadingErrorDesc")}
               </p>
             </div>
             <Link href="/dashboard/integrations" className="ml-auto">
               <Button variant="outline">
-                {locale === 'ru' ? 'Синхронизировать' : 'Sync'}
+                {t("dashboard.sync")}
               </Button>
             </Link>
           </CardContent>
@@ -228,7 +227,7 @@ export default function DashboardPage() {
                 <div className="mt-4">
                   <p className="text-2xl font-semibold">{stat.value}</p>
                   <p className="text-sm text-muted-foreground">
-                    {locale === 'ru' ? stat.title : stat.titleEn}
+                    {stat.title}
                   </p>
                 </div>
               </CardContent>
@@ -237,39 +236,178 @@ export default function DashboardPage() {
         </div>
       )}
 
+      {/* Subscription card */}
+      {features && (
+        features.plan_code && features.plan_code !== 'free' ? (
+          // Has a paid plan — show subscription info with days counter
+          <Card className="glass-card border-primary/20 bg-primary/5">
+            <CardContent className="p-6">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 mb-4">
+                <div className="flex items-center gap-3">
+                  {(() => {
+                    const config = planConfig[features.plan_code || ''] || { icon: Zap, color: 'text-primary' }
+                    const Icon = config.icon
+                    return (
+                      <div className="p-2 rounded-xl bg-muted">
+                        <Icon className={cn("h-5 w-5", config.color)} />
+                      </div>
+                    )
+                  })()}
+                  <div>
+                    <p className="font-semibold text-foreground">
+                      {features.plan_name || 'Тариф'}
+                    </p>
+                    {features.subscription_ends_at && (() => {
+                      const days = getDaysRemaining(features.subscription_ends_at)
+                      return (
+                        <div className="flex items-center gap-2">
+                          <p className="text-xs text-muted-foreground">
+                            до {format(new Date(features.subscription_ends_at), 'd MMM yyyy', { locale: ru })}
+                          </p>
+                          {days !== null && (
+                            <span className={cn("text-xs font-medium flex items-center gap-0.5", getDaysColor(days))}>
+                              <Clock className="h-3 w-3" />
+                              {getDaysText(days)}
+                            </span>
+                          )}
+                        </div>
+                      )
+                    })()}
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {features.is_trial && (
+                    <Badge variant="outline" className="text-xs">{t("dashboard.trialBadge")}</Badge>
+                  )}
+                  <Badge variant="default" className="text-xs">{t("dashboard.activeBadge")}</Badge>
+                </div>
+              </div>
+
+              <div className="grid sm:grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground flex items-center gap-1.5">
+                      <BarChart3 className="h-3.5 w-3.5" />
+                      {t("dashboard.analyticsLabel")}
+                    </span>
+                    <span className="font-medium">
+                      {stats?.products_count ?? 0} / {features.analytics_limit === -1 ? '∞' : features.analytics_limit}
+                    </span>
+                  </div>
+                  {features.analytics_limit !== -1 && (
+                    <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-primary rounded-full transition-all"
+                        style={{ width: `${Math.min(((stats?.products_count ?? 0) / features.analytics_limit) * 100, 100)}%` }}
+                      />
+                    </div>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <div className="flex justify-between text-sm">
+                    <span className="text-muted-foreground flex items-center gap-1.5">
+                      <TrendingUp className="h-3.5 w-3.5" />
+                      {t("dashboard.dempingLabel")}
+                    </span>
+                    <span className="font-medium">
+                      {stats?.demping_enabled_count ?? 0} / {features.demping_limit}
+                    </span>
+                  </div>
+                  <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                    <div
+                      className={cn(
+                        "h-full rounded-full transition-all",
+                        features.demping_limit > 0 && ((stats?.demping_enabled_count ?? 0) / features.demping_limit) >= 0.8
+                          ? "bg-yellow-500"
+                          : "bg-primary"
+                      )}
+                      style={{ width: `${features.demping_limit > 0 ? Math.min(((stats?.demping_enabled_count ?? 0) / features.demping_limit) * 100, 100) : 0}%` }}
+                    />
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-3 text-right">
+                <Link href="/dashboard/billing">
+                  <Button variant="ghost" size="sm" className="text-xs">
+                    {t("dashboard.details")} <ArrowRight className="h-3 w-3 ml-1" />
+                  </Button>
+                </Link>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          // No real plan — show trial CTA
+          <Card className="glass-card border-green-500/30 bg-green-500/5">
+            <CardContent className="p-6">
+              <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="p-2.5 rounded-xl bg-green-500/20">
+                    <Sparkles className="h-5 w-5 text-green-500" />
+                  </div>
+                  <div>
+                    <p className="font-semibold text-foreground">{t("dashboard.tryFree3Days")}</p>
+                    <p className="text-sm text-muted-foreground">
+                      {t("dashboard.tryFree3DaysDesc")}
+                    </p>
+                  </div>
+                </div>
+                <Button
+                  className="bg-green-600 hover:bg-green-700 text-white shrink-0"
+                  onClick={() => activateTrial.mutate()}
+                  disabled={activateTrial.isPending}
+                >
+                  {activateTrial.isPending ? (
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-4 w-4 mr-2" />
+                  )}
+                  {t("dashboard.activate")}
+                </Button>
+              </div>
+              {activateTrial.isError && (
+                <p className="text-sm text-red-500 mt-2">
+                  {(activateTrial.error as any)?.message || t("dashboard.trialError")}
+                </p>
+              )}
+            </CardContent>
+          </Card>
+        )
+      )}
+
       {/* Monthly summary */}
       {selectedStore && stats && (
         <div className="grid gap-4 sm:grid-cols-3">
           <Card className="glass-card">
             <CardContent className="p-6">
               <p className="text-sm text-muted-foreground mb-1">
-                {locale === 'ru' ? 'За неделю' : 'This week'}
+                {t("dashboard.thisWeek")}
               </p>
               <p className="text-xl font-semibold">{formatCurrency(stats.week_revenue)}</p>
               <p className="text-sm text-muted-foreground">
-                {formatNumber(stats.week_orders)} {locale === 'ru' ? 'заказов' : 'orders'}
+                {formatNumber(stats.week_orders)} {t("dashboard.orders")}
               </p>
             </CardContent>
           </Card>
           <Card className="glass-card">
             <CardContent className="p-6">
               <p className="text-sm text-muted-foreground mb-1">
-                {locale === 'ru' ? 'За месяц' : 'This month'}
+                {t("dashboard.thisMonth")}
               </p>
               <p className="text-xl font-semibold">{formatCurrency(stats.month_revenue)}</p>
               <p className="text-sm text-muted-foreground">
-                {formatNumber(stats.month_orders)} {locale === 'ru' ? 'заказов' : 'orders'}
+                {formatNumber(stats.month_orders)} {t("dashboard.orders")}
               </p>
             </CardContent>
           </Card>
           <Card className="glass-card">
             <CardContent className="p-6">
               <p className="text-sm text-muted-foreground mb-1">
-                {locale === 'ru' ? 'Товаров в магазине' : 'Products in store'}
+                {t("dashboard.productsInStore")}
               </p>
               <p className="text-xl font-semibold">{formatNumber(stats.products_count)}</p>
               <p className="text-sm text-muted-foreground">
-                {formatNumber(stats.active_products_count)} {locale === 'ru' ? 'активных' : 'active'}
+                {formatNumber(stats.active_products_count)} {t("dashboard.activeProducts")}
               </p>
             </CardContent>
           </Card>
@@ -279,7 +417,7 @@ export default function DashboardPage() {
       {/* Quick actions */}
       <div>
         <h2 className="text-lg font-semibold mb-4">
-          {locale === 'ru' ? 'Быстрые действия' : 'Quick actions'}
+          {t("dashboard.quickActions")}
         </h2>
         <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {quickActions.map((action) => (
@@ -294,10 +432,10 @@ export default function DashboardPage() {
                   </div>
                   <div className="mt-4">
                     <h3 className="font-semibold">
-                      {locale === 'ru' ? action.title : action.titleEn}
+                      {t(action.titleKey)}
                     </h3>
                     <p className="text-sm text-muted-foreground mt-1">
-                      {locale === 'ru' ? action.description : action.descriptionEn}
+                      {t(action.descKey)}
                     </p>
                   </div>
                 </CardContent>
@@ -310,8 +448,8 @@ export default function DashboardPage() {
       {/* Last sync info */}
       {selectedStore && stats?.last_sync && (
         <p className="text-xs text-muted-foreground text-center">
-          {locale === 'ru' ? 'Последняя синхронизация:' : 'Last sync:'}{' '}
-          {new Date(stats.last_sync).toLocaleString(locale === 'ru' ? 'ru-RU' : 'en-US')}
+          {t("dashboard.lastSync")}{' '}
+          {new Date(stats.last_sync).toLocaleString('ru-RU')}
         </p>
       )}
     </div>

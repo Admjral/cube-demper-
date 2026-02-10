@@ -1,7 +1,8 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { useStore } from "@/store/use-store"
+import { useT } from "@/lib/i18n"
+import { SubscriptionGate } from "@/components/shared/subscription-gate"
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -67,7 +68,7 @@ import {
 } from "@/lib/unit-economics"
 
 export default function UnitEconomicsPage() {
-  const { locale } = useStore()
+  const t = useT()
   const [activeTab, setActiveTab] = useState("calculator")
   const [parsingUrl, setParsingUrl] = useState(false)
   const [kaspiUrl, setKaspiUrl] = useState("")
@@ -159,6 +160,7 @@ export default function UnitEconomicsPage() {
           sellingPrice: response.price || prev.sellingPrice,
           category: response.category || prev.category,
           subcategory: response.subcategory || "",
+          weightKg: response.weight_kg || prev.weightKg,
         }))
         // Set product name for saving
         if (response.product_name) {
@@ -284,17 +286,16 @@ export default function UnitEconomicsPage() {
   }
 
   return (
+    <SubscriptionGate>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">
-            {locale === "ru" ? "Юнит-экономика" : "Unit Economics"}
+            {t("unit.title")}
           </h1>
           <p className="text-muted-foreground">
-            {locale === "ru"
-              ? "Расчёт маржинальности с учётом комиссий Kaspi, налогов и доставки"
-              : "Margin calculation including Kaspi commissions, taxes, and delivery"}
+            {t("unit.subtitle")}
           </p>
         </div>
       </div>
@@ -303,11 +304,11 @@ export default function UnitEconomicsPage() {
         <TabsList>
           <TabsTrigger value="calculator" className="flex items-center gap-2">
             <Calculator className="h-4 w-4" />
-            {locale === "ru" ? "Калькулятор" : "Calculator"}
+            {t("unit.calculator")}
           </TabsTrigger>
           <TabsTrigger value="library" className="flex items-center gap-2">
             <BookMarked className="h-4 w-4" />
-            {locale === "ru" ? "Библиотека" : "Library"}
+            {t("unit.library")}
             {savedCalculations.length > 0 && (
               <Badge variant="secondary" className="ml-1">
                 {savedCalculations.length}
@@ -323,12 +324,10 @@ export default function UnitEconomicsPage() {
             <CardHeader className="pb-3">
               <CardTitle className="flex items-center gap-2 text-base">
                 <Link2 className="h-5 w-5" />
-                {locale === "ru" ? "Быстрый импорт с Kaspi" : "Quick Import from Kaspi"}
+                {t("unit.quickImport")}
               </CardTitle>
               <CardDescription>
-                {locale === "ru"
-                  ? "Вставьте ссылку на товар Kaspi для автозаполнения"
-                  : "Paste Kaspi product link to auto-fill"}
+                {t("unit.quickImportDesc")}
               </CardDescription>
             </CardHeader>
             <CardContent>
@@ -363,12 +362,12 @@ export default function UnitEconomicsPage() {
                         <p className="font-medium">{parsedProduct.product_name || "Товар найден"}</p>
                         {parsedProduct.price && (
                           <p className="text-muted-foreground">
-                            {locale === "ru" ? "Цена:" : "Price:"} {formatPrice(parsedProduct.price)}
+                            {t("unit.priceLabel")} {formatPrice(parsedProduct.price)}
                           </p>
                         )}
                         {parsedProduct.category && (
                           <p className="text-muted-foreground">
-                            {locale === "ru" ? "Категория:" : "Category:"} {parsedProduct.category}
+                            {t("unit.categoryLabel")} {parsedProduct.category}
                           </p>
                         )}
                       </div>
@@ -390,7 +389,7 @@ export default function UnitEconomicsPage() {
               <CardHeader>
                 <CardTitle className="flex items-center gap-2">
                   <Calculator className="h-5 w-5" />
-                  {locale === "ru" ? "Параметры расчёта" : "Calculation Parameters"}
+                  {t("unit.calcParams")}
                 </CardTitle>
               </CardHeader>
               <CardContent className="space-y-6">
@@ -400,7 +399,7 @@ export default function UnitEconomicsPage() {
                   <div className="space-y-2">
                     <Label htmlFor="sellingPrice" className="flex items-center gap-2">
                       <DollarSign className="h-4 w-4 text-muted-foreground" />
-                      {locale === "ru" ? "Цена продажи" : "Selling price"}
+                      {t("unit.sellingPrice")}
                     </Label>
                     <Input
                       id="sellingPrice"
@@ -416,7 +415,7 @@ export default function UnitEconomicsPage() {
                   <div className="space-y-2">
                     <Label htmlFor="purchasePrice" className="flex items-center gap-2">
                       <Package className="h-4 w-4 text-muted-foreground" />
-                      {locale === "ru" ? "Цена закупки" : "Purchase price"}
+                      {t("unit.purchasePrice")}
                     </Label>
                     <Input
                       id="purchasePrice"
@@ -433,7 +432,7 @@ export default function UnitEconomicsPage() {
                 <div className="space-y-2">
                   <Label className="flex items-center gap-2">
                     <Percent className="h-4 w-4 text-muted-foreground" />
-                    {locale === "ru" ? "Категория товара" : "Product category"}
+                    {t("unit.productCategory")}
                   </Label>
                   <Select
                     value={values.category}
@@ -452,9 +451,12 @@ export default function UnitEconomicsPage() {
                   </Select>
                   {result && (
                     <p className="text-xs text-muted-foreground">
-                      {locale === "ru" ? "Комиссия Kaspi:" : "Kaspi commission:"}{" "}
-                      <span className="font-medium">{formatPercent(result.commission_rate)}</span>
-                      {values.useVat ? " (с НДС)" : " (без НДС)"}
+                      {t("unit.kaspiCommission")}{" "}
+                      <span className="font-medium">
+                        {formatPercent(result.commission_rate)}
+                        {!values.useVat && ` + НДС = ${formatPercent(result.commission_effective_rate)}`}
+                      </span>
+                      {values.useVat ? ` ${t("unit.withVAT")}` : ` ${t("unit.withoutVAT")}`}
                     </p>
                   )}
                 </div>
@@ -463,7 +465,7 @@ export default function UnitEconomicsPage() {
                 <div className="space-y-2">
                   <Label className="flex items-center gap-2">
                     <Building2 className="h-4 w-4 text-muted-foreground" />
-                    {locale === "ru" ? "Налоговый режим" : "Tax regime"}
+                    {t("unit.taxRegime")}
                   </Label>
                   <Select
                     value={values.taxRegime}
@@ -486,7 +488,7 @@ export default function UnitEconomicsPage() {
                 <div className="space-y-2">
                   <Label htmlFor="weight" className="flex items-center gap-2">
                     <Scale className="h-4 w-4 text-muted-foreground" />
-                    {locale === "ru" ? "Вес товара (кг)" : "Product weight (kg)"}
+                    {t("unit.productWeight")}
                   </Label>
                   <Input
                     id="weight"
@@ -508,7 +510,7 @@ export default function UnitEconomicsPage() {
                   onClick={() => setShowAdvanced(!showAdvanced)}
                 >
                   <span>
-                    {locale === "ru" ? "Дополнительные расходы" : "Additional costs"}
+                    {t("unit.additionalCosts")}
                   </span>
                   {showAdvanced ? (
                     <ChevronUp className="h-4 w-4" />
@@ -522,7 +524,7 @@ export default function UnitEconomicsPage() {
                     {/* Packaging */}
                     <div className="space-y-2">
                       <Label htmlFor="packagingCost">
-                        {locale === "ru" ? "Упаковка" : "Packaging"}
+                        {t("unit.packaging")}
                       </Label>
                       <Input
                         id="packagingCost"
@@ -537,7 +539,7 @@ export default function UnitEconomicsPage() {
                     {/* Other costs */}
                     <div className="space-y-2">
                       <Label htmlFor="otherCosts">
-                        {locale === "ru" ? "Прочие расходы" : "Other costs"}
+                        {t("unit.otherCosts")}
                       </Label>
                       <Input
                         id="otherCosts"
@@ -552,9 +554,7 @@ export default function UnitEconomicsPage() {
                     {/* VAT toggle */}
                     <div className="flex items-center justify-between">
                       <Label htmlFor="useVat" className="cursor-pointer">
-                        {locale === "ru"
-                          ? "Комиссия с НДС (плательщик НДС)"
-                          : "Commission with VAT"}
+                        {t("unit.commissionVAT")}
                       </Label>
                       <Switch
                         id="useVat"
@@ -586,7 +586,7 @@ export default function UnitEconomicsPage() {
                     }
                   >
                     <RefreshCw className="h-4 w-4 mr-2" />
-                    {locale === "ru" ? "Сбросить" : "Reset"}
+                    {t("unit.reset")}
                   </Button>
                   <Button
                     className="flex-1"
@@ -594,7 +594,7 @@ export default function UnitEconomicsPage() {
                     disabled={!result || values.sellingPrice === 0}
                   >
                     <Save className="h-4 w-4 mr-2" />
-                    {locale === "ru" ? "Сохранить" : "Save"}
+                    {t("unit.save")}
                   </Button>
                 </div>
               </CardContent>
@@ -608,7 +608,7 @@ export default function UnitEconomicsPage() {
                   <CardContent className="p-6">
                     <div className="text-center">
                       <p className="text-sm text-muted-foreground mb-1">
-                        {locale === "ru" ? "Лучший вариант" : "Best scenario"}:{" "}
+                        {t("unit.bestScenario")}:{" "}
                         <span className="font-medium">
                           {DELIVERY_TYPES[result.best_scenario]?.name || result.best_scenario}
                         </span>
@@ -617,7 +617,7 @@ export default function UnitEconomicsPage() {
                         {formatPrice(result.best_profit)}
                       </p>
                       <p className="text-lg text-muted-foreground mt-1">
-                        {locale === "ru" ? "Маржа" : "Margin"}:{" "}
+                        {t("unit.margin")}:{" "}
                         <span className={getMarginColor(result.best_margin)}>
                           {formatPercent(result.best_margin)}
                         </span>
@@ -633,7 +633,7 @@ export default function UnitEconomicsPage() {
                   <CardHeader>
                     <CardTitle className="flex items-center gap-2">
                       <Truck className="h-5 w-5" />
-                      {locale === "ru" ? "Сравнение по доставке" : "Delivery Comparison"}
+                      {t("unit.deliveryComparison")}
                     </CardTitle>
                   </CardHeader>
                   <CardContent>
@@ -651,7 +651,7 @@ export default function UnitEconomicsPage() {
                             <div>
                               <p className="font-medium text-sm">{scenario.name}</p>
                               <p className="text-xs text-muted-foreground">
-                                {locale === "ru" ? "Доставка:" : "Delivery:"}{" "}
+                                {t("unit.delivery")}{" "}
                                 {formatPrice(scenario.cost)}
                               </p>
                             </div>
@@ -679,29 +679,35 @@ export default function UnitEconomicsPage() {
                 <Card className="glass-card">
                   <CardHeader>
                     <CardTitle>
-                      {locale === "ru" ? "Детализация расходов" : "Cost Breakdown"}
+                      {t("unit.costBreakdown")}
                     </CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-3">
                     <div className="flex justify-between items-center">
                       <span className="text-muted-foreground">
-                        {locale === "ru" ? "Цена продажи" : "Selling price"}
+                        {t("unit.sellingPrice")}
                       </span>
                       <span className="font-semibold">{formatPrice(result.selling_price)}</span>
                     </div>
                     <Separator />
                     <div className="flex justify-between items-center">
                       <span className="text-muted-foreground">
-                        {locale === "ru" ? "Цена закупки" : "Purchase price"}
+                        {t("unit.purchasePrice")}
                       </span>
                       <span className="text-red-500">-{formatPrice(result.purchase_price)}</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-muted-foreground">
-                        {locale === "ru" ? "Комиссия Kaspi" : "Kaspi commission"} (
-                        {formatPercent(result.commission_rate)})
+                        {t("unit.kaspiCommission")} (
+                        {formatPercent(result.commission_effective_rate)})
                       </span>
                       <span className="text-red-500">-{formatPrice(result.commission_amount)}</span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span className="text-muted-foreground">
+                        Kaspi Pay ({formatPercent(result.kaspi_pay_rate)})
+                      </span>
+                      <span className="text-red-500">-{formatPrice(result.kaspi_pay_amount)}</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="text-muted-foreground">
@@ -712,7 +718,7 @@ export default function UnitEconomicsPage() {
                     {result.packaging_cost > 0 && (
                       <div className="flex justify-between items-center">
                         <span className="text-muted-foreground">
-                          {locale === "ru" ? "Упаковка" : "Packaging"}
+                          {t("unit.packaging")}
                         </span>
                         <span className="text-red-500">-{formatPrice(result.packaging_cost)}</span>
                       </div>
@@ -720,7 +726,7 @@ export default function UnitEconomicsPage() {
                     {result.other_costs > 0 && (
                       <div className="flex justify-between items-center">
                         <span className="text-muted-foreground">
-                          {locale === "ru" ? "Прочие расходы" : "Other costs"}
+                          {t("unit.otherCosts")}
                         </span>
                         <span className="text-red-500">-{formatPrice(result.other_costs)}</span>
                       </div>
@@ -736,16 +742,12 @@ export default function UnitEconomicsPage() {
                     <Info className="h-5 w-5 text-muted-foreground mt-0.5 shrink-0" />
                     <div>
                       <p className="font-medium">
-                        {locale === "ru" ? "Подсказка" : "Tip"}
+                        {t("unit.tip")}
                       </p>
                       <p className="text-sm text-muted-foreground">
                         {result && result.best_margin < 15
-                          ? locale === "ru"
-                            ? "Маржа ниже 15%. Рассмотрите повышение цены, поиск более дешёвого поставщика или выбор самовывоза для снижения расходов."
-                            : "Margin below 15%. Consider raising price, finding cheaper supplier, or using self-pickup to reduce costs."
-                          : locale === "ru"
-                          ? "Хорошая маржинальность! Самовывоз обычно даёт максимальную прибыль, но может снизить конверсию."
-                          : "Good margin! Self-pickup usually gives maximum profit but may reduce conversion."}
+                          ? t("unit.tipLowMargin")
+                          : t("unit.tipGoodMargin")}
                       </p>
                     </div>
                   </div>
@@ -760,7 +762,7 @@ export default function UnitEconomicsPage() {
           {/* Export buttons */}
           <div className="flex justify-between items-center">
             <h2 className="text-lg font-semibold">
-              {locale === "ru" ? "Сохранённые расчёты" : "Saved Calculations"}
+              {t("unit.savedCalcs")}
             </h2>
             <div className="flex gap-2">
               <Button
@@ -801,16 +803,14 @@ export default function UnitEconomicsPage() {
               <CardContent className="flex flex-col items-center justify-center py-12 text-center">
                 <BookMarked className="h-12 w-12 text-muted-foreground mb-4" />
                 <h3 className="text-lg font-medium mb-2">
-                  {locale === "ru" ? "Нет сохранённых расчётов" : "No saved calculations"}
+                  {t("unit.noSavedCalcs")}
                 </h3>
                 <p className="text-muted-foreground mb-4">
-                  {locale === "ru"
-                    ? "Сохраняйте расчёты для быстрого доступа и экспорта"
-                    : "Save calculations for quick access and export"}
+                  {t("unit.noSavedCalcsDesc")}
                 </p>
                 <Button onClick={() => setActiveTab("calculator")}>
                   <Calculator className="h-4 w-4 mr-2" />
-                  {locale === "ru" ? "Создать расчёт" : "Create calculation"}
+                  {t("unit.createCalc")}
                 </Button>
               </CardContent>
             </Card>
@@ -839,11 +839,11 @@ export default function UnitEconomicsPage() {
                   <CardContent className="space-y-3">
                     <div className="grid grid-cols-2 gap-2 text-sm">
                       <div>
-                        <p className="text-muted-foreground">{locale === "ru" ? "Продажа" : "Sale"}</p>
+                        <p className="text-muted-foreground">{t("unit.sale")}</p>
                         <p className="font-medium">{formatPrice(calc.selling_price)}</p>
                       </div>
                       <div>
-                        <p className="text-muted-foreground">{locale === "ru" ? "Закупка" : "Purchase"}</p>
+                        <p className="text-muted-foreground">{t("unit.purchase")}</p>
                         <p className="font-medium">{formatPrice(calc.purchase_price)}</p>
                       </div>
                     </div>
@@ -851,13 +851,13 @@ export default function UnitEconomicsPage() {
                     {calc.best_profit !== undefined && (
                       <div className={`p-2 rounded-lg ${getMarginBg(calc.best_margin || 0)}`}>
                         <div className="flex justify-between items-center">
-                          <span className="text-sm">{locale === "ru" ? "Прибыль" : "Profit"}</span>
+                          <span className="text-sm">{t("unit.profit")}</span>
                           <span className={`font-bold ${getMarginColor(calc.best_margin || 0)}`}>
                             {formatPrice(calc.best_profit)}
                           </span>
                         </div>
                         <div className="flex justify-between items-center text-sm">
-                          <span className="text-muted-foreground">{locale === "ru" ? "Маржа" : "Margin"}</span>
+                          <span className="text-muted-foreground">{t("unit.margin")}</span>
                           <span className={getMarginColor(calc.best_margin || 0)}>
                             {formatPercent(calc.best_margin || 0)}
                           </span>
@@ -873,7 +873,7 @@ export default function UnitEconomicsPage() {
                         onClick={() => loadSavedToCalculator(calc)}
                       >
                         <Calculator className="h-4 w-4 mr-1" />
-                        {locale === "ru" ? "Открыть" : "Open"}
+                        {t("common.open")}
                       </Button>
                       <Button
                         variant="ghost"
@@ -900,27 +900,25 @@ export default function UnitEconomicsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {locale === "ru" ? "Сохранить расчёт" : "Save Calculation"}
+              {t("unit.saveCalc")}
             </DialogTitle>
             <DialogDescription>
-              {locale === "ru"
-                ? "Введите название для сохранения расчёта в библиотеку"
-                : "Enter a name to save this calculation to your library"}
+              {t("unit.saveCalcDesc")}
             </DialogDescription>
           </DialogHeader>
           <div className="py-4">
-            <Label htmlFor="productName">{locale === "ru" ? "Название товара" : "Product name"}</Label>
+            <Label htmlFor="productName">{t("unit.productName")}</Label>
             <Input
               id="productName"
               value={saveProductName}
               onChange={(e) => setSaveProductName(e.target.value)}
-              placeholder={locale === "ru" ? "Например: iPhone 15 Pro" : "e.g., iPhone 15 Pro"}
+              placeholder={t("unit.productNamePlaceholder")}
               className="mt-2"
             />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSaveDialog(false)}>
-              {locale === "ru" ? "Отмена" : "Cancel"}
+              {t("common.cancel2")}
             </Button>
             <Button
               onClick={handleSaveCalculation}
@@ -931,7 +929,7 @@ export default function UnitEconomicsPage() {
               ) : (
                 <Save className="h-4 w-4 mr-2" />
               )}
-              {locale === "ru" ? "Сохранить" : "Save"}
+              {t("unit.save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -942,25 +940,24 @@ export default function UnitEconomicsPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {locale === "ru" ? "Удалить расчёт?" : "Delete Calculation?"}
+              {t("unit.deleteCalc")}
             </DialogTitle>
             <DialogDescription>
-              {locale === "ru"
-                ? "Это действие нельзя отменить. Расчёт будет удалён из библиотеки."
-                : "This action cannot be undone. The calculation will be removed from your library."}
+              {t("unit.deleteCalcDesc")}
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowDeleteDialog(false)}>
-              {locale === "ru" ? "Отмена" : "Cancel"}
+              {t("common.cancel2")}
             </Button>
             <Button variant="destructive" onClick={handleDeleteCalculation}>
               <Trash2 className="h-4 w-4 mr-2" />
-              {locale === "ru" ? "Удалить" : "Delete"}
+              {t("common.delete")}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
+    </SubscriptionGate>
   )
 }

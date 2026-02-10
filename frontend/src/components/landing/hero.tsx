@@ -1,8 +1,12 @@
+'use client'
+
 import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { ArrowRight, Play, Sparkles } from 'lucide-react'
+import { useT } from '@/lib/i18n'
 
 export function Hero() {
+  const t = useT()
   return (
     <section className="relative pt-32 pb-20 md:pt-40 md:pb-32 overflow-hidden">
       {/* Background effects */}
@@ -14,33 +18,31 @@ export function Hero() {
           {/* Badge */}
           <div className="inline-flex items-center gap-2 px-4 py-2 rounded-full bg-primary/10 text-primary text-sm font-medium mb-8">
             <Sparkles className="h-4 w-4" />
-            <span>Новые ИИ-ассистенты для продавцов</span>
+            <span>{t("landing.newAI")}</span>
           </div>
 
           {/* Heading */}
           <h1 className="text-4xl md:text-6xl lg:text-7xl font-bold text-foreground tracking-tight mb-6">
-            Автоматизируйте продажи на{' '}
-            <span className="text-primary">Kaspi</span>
+            {t("landing.heroTitle")}
           </h1>
 
           {/* Subheading */}
           <p className="text-lg md:text-xl text-muted-foreground max-w-2xl mx-auto mb-10">
-            Ценовой бот, аналитика продаж, WhatsApp рассылки и ИИ-ассистенты
-            для увеличения ваших продаж на маркетплейсе Kaspi.kz
+            {t("landing.heroDesc")}
           </p>
 
           {/* CTA buttons */}
           <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
             <Link href="/register">
               <Button size="lg" className="w-full sm:w-auto text-base px-8">
-                Начать бесплатно
+                {t("landing.startFree")}
                 <ArrowRight className="ml-2 h-5 w-5" />
               </Button>
             </Link>
             <Link href="#features">
               <Button variant="outline" size="lg" className="w-full sm:w-auto text-base px-8">
                 <Play className="mr-2 h-5 w-5" />
-                Смотреть демо
+                {t("landing.watchDemo")}
               </Button>
             </Link>
           </div>
@@ -49,15 +51,15 @@ export function Hero() {
           <div className="grid grid-cols-3 gap-8 mt-16 pt-8 border-t border-border">
             <div>
               <p className="text-3xl md:text-4xl font-bold text-foreground">500+</p>
-              <p className="text-sm text-muted-foreground mt-1">Активных продавцов</p>
+              <p className="text-sm text-muted-foreground mt-1">{t("landing.activeSellers")}</p>
             </div>
             <div>
               <p className="text-3xl md:text-4xl font-bold text-foreground">2M+</p>
-              <p className="text-sm text-muted-foreground mt-1">Обработано товаров</p>
+              <p className="text-sm text-muted-foreground mt-1">{t("landing.productsProcessed")}</p>
             </div>
             <div>
               <p className="text-3xl md:text-4xl font-bold text-foreground">24/7</p>
-              <p className="text-sm text-muted-foreground mt-1">Автоматизация</p>
+              <p className="text-sm text-muted-foreground mt-1">{t("landing.automation")}</p>
             </div>
           </div>
         </div>

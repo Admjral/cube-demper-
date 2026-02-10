@@ -58,10 +58,11 @@ class SendContactRequest(BaseModel):
 class WhatsAppTemplateCreate(BaseModel):
     """Schema for creating WhatsApp template"""
     name: str = Field(..., min_length=1, max_length=255)
+    name_en: Optional[str] = None
     message: str = Field(..., min_length=1, max_length=4096)
-    variables: Optional[Dict[str, str]] = Field(
+    variables: Optional[Any] = Field(
         None,
-        description="Template variables like {customer_name}, {order_id}"
+        description="Template variables - list of strings or dict"
     )
     trigger_event: Optional[str] = Field(
         None,
@@ -73,8 +74,9 @@ class WhatsAppTemplateCreate(BaseModel):
 class WhatsAppTemplateUpdate(BaseModel):
     """Schema for updating WhatsApp template"""
     name: Optional[str] = Field(None, min_length=1, max_length=255)
+    name_en: Optional[str] = None
     message: Optional[str] = Field(None, min_length=1, max_length=4096)
-    variables: Optional[Dict[str, str]] = None
+    variables: Optional[Any] = None
     trigger_event: Optional[str] = None
     is_active: Optional[bool] = None
 
@@ -84,9 +86,10 @@ class WhatsAppTemplateResponse(BaseModel):
     id: str
     user_id: str
     name: str
+    name_en: Optional[str] = None
     message: str
-    variables: Optional[Dict[str, str]]
-    trigger_event: Optional[str]
+    variables: Optional[Any] = None
+    trigger_event: Optional[str] = None
     is_active: bool
     created_at: datetime
     updated_at: datetime

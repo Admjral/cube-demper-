@@ -28,7 +28,7 @@ async def create_pool() -> asyncpg.Pool:
                 password=settings.postgres_password,
                 min_size=settings.db_pool_min_size,
                 max_size=settings.db_pool_max_size,
-                command_timeout=60,
+                command_timeout=30,
             ),
             timeout=30.0  # 30 second timeout for pool creation
         )

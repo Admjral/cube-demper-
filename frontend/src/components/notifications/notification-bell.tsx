@@ -19,7 +19,7 @@ import {
   type Notification,
 } from '@/hooks/use-notifications'
 import { formatDistanceToNow } from 'date-fns'
-import { ru } from 'date-fns/locale'
+import { useTranslation, getDateLocale } from '@/lib/i18n'
 import {
   TrendingDown,
   Users,
@@ -60,6 +60,7 @@ function NotificationItem({
   notification: Notification
   onRead: (id: string) => void
 }) {
+  const { locale } = useTranslation()
   const meta = getNotificationMeta(notification.type)
   const IconComponent = iconMap[meta.icon] || Bell
 
@@ -90,7 +91,7 @@ function NotificationItem({
         <p className="text-xs text-muted-foreground mt-1">
           {formatDistanceToNow(new Date(notification.created_at), {
             addSuffix: true,
-            locale: ru,
+            locale: getDateLocale(locale),
           })}
         </p>
       </div>
@@ -99,6 +100,7 @@ function NotificationItem({
 }
 
 export function NotificationBell() {
+  const { t } = useTranslation()
   const [open, setOpen] = useState(false)
   const { data: unreadData } = useUnreadCount()
   const { data: notificationsData, isLoading } = useNotifications(20, 0, false)
@@ -129,12 +131,12 @@ export function NotificationBell() {
               {unreadCount > 9 ? '9+' : unreadCount}
             </Badge>
           )}
-          <span className="sr-only">Уведомления</span>
+          <span className="sr-only">{t('notifications.title')}</span>
         </Button>
       </PopoverTrigger>
       <PopoverContent className="w-80 p-0" align="end">
         <div className="flex items-center justify-between px-4 py-3 border-b">
-          <h3 className="font-semibold">Уведомления</h3>
+          <h3 className="font-semibold">{t('notifications.title')}</h3>
           {unreadCount > 0 && (
             <Button
               variant="ghost"
@@ -148,7 +150,7 @@ export function NotificationBell() {
               ) : (
                 <Check className="h-3 w-3 mr-1" />
               )}
-              Прочитать все
+              {t('notifications.readAll')}
             </Button>
           )}
         </div>
@@ -161,7 +163,7 @@ export function NotificationBell() {
           ) : notifications.length === 0 ? (
             <div className="flex flex-col items-center justify-center py-8 text-center">
               <Bell className="h-10 w-10 text-muted-foreground mb-2" />
-              <p className="text-sm text-muted-foreground">Нет уведомлений</p>
+              <p className="text-sm text-muted-foreground">{t('notifications.empty')}</p>
             </div>
           ) : (
             notifications.map((notification) => (

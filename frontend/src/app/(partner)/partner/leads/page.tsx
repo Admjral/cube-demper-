@@ -35,11 +35,11 @@ export default function PartnerLeadsPage() {
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Приведённые клиенты</h1>
-        <p className="text-muted-foreground">
-          Всего: {data?.total ?? 0} клиентов
+        <h1 className="text-xl sm:text-2xl font-semibold">Приведённые клиенты</h1>
+        <p className="text-sm text-muted-foreground">
+          Всего: {data?.total ?? 0}
         </p>
       </div>
 
@@ -48,74 +48,99 @@ export default function PartnerLeadsPage() {
           <CardContent className="flex flex-col items-center justify-center py-12">
             <Users className="h-12 w-12 text-muted-foreground mb-4" />
             <p className="text-muted-foreground">Пока нет приведённых клиентов</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Поделитесь реферальной ссылкой, чтобы привлекать клиентов
+            <p className="text-sm text-muted-foreground mt-1 text-center">
+              Поделитесь промокодом, чтобы привлекать клиентов
             </p>
           </CardContent>
         </Card>
       ) : (
-        <Card className="glass-card">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <Users className="h-5 w-5" />
-              Клиенты
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead>
-                  <tr className="border-b">
-                    <th className="text-left py-3 px-2 text-sm font-medium text-muted-foreground">
-                      Email
-                    </th>
-                    <th className="text-left py-3 px-2 text-sm font-medium text-muted-foreground">
-                      Имя
-                    </th>
-                    <th className="text-left py-3 px-2 text-sm font-medium text-muted-foreground">
-                      Дата регистрации
-                    </th>
-                    <th className="text-left py-3 px-2 text-sm font-medium text-muted-foreground">
-                      Статус
-                    </th>
-                    <th className="text-right py-3 px-2 text-sm font-medium text-muted-foreground">
-                      Ваш заработок
-                    </th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {data?.leads.map((lead) => (
-                    <tr key={lead.id} className="border-b last:border-0">
-                      <td className="py-3 px-2 text-sm">{lead.email}</td>
-                      <td className="py-3 px-2 text-sm">{lead.full_name || '-'}</td>
-                      <td className="py-3 px-2 text-sm text-muted-foreground">
-                        {lead.registered_at
-                          ? format(new Date(lead.registered_at), 'd MMM yyyy', { locale: ru })
-                          : '-'}
-                      </td>
-                      <td className="py-3 px-2">
-                        <Badge
-                          variant={lead.status === 'paid' ? 'default' : 'secondary'}
-                        >
-                          {lead.status === 'paid' ? 'Оплатил' : 'Зарегистрирован'}
-                        </Badge>
-                      </td>
-                      <td className="py-3 px-2 text-sm text-right font-medium">
-                        {lead.partner_earned > 0 ? (
-                          <span className="text-green-600">
-                            +{(lead.partner_earned / 100).toLocaleString()} ₸
-                          </span>
-                        ) : (
-                          '-'
-                        )}
-                      </td>
+        <>
+          {/* Mobile view - Cards */}
+          <div className="sm:hidden space-y-2">
+            {data?.leads.map((lead) => (
+              <Card key={lead.id} className="glass-card">
+                <CardContent className="p-3 space-y-2">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="text-sm font-medium truncate">{lead.email}</p>
+                    <Badge
+                      variant={lead.status === 'paid' ? 'default' : 'secondary'}
+                      className="shrink-0 text-xs"
+                    >
+                      {lead.status === 'paid' ? 'Оплатил' : 'Зарег.'}
+                    </Badge>
+                  </div>
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="text-muted-foreground">
+                      {lead.full_name || 'Без имени'} {'\u00B7'}{' '}
+                      {lead.registered_at
+                        ? format(new Date(lead.registered_at), 'd MMM yyyy', { locale: ru })
+                        : '-'}
+                    </span>
+                    {lead.partner_earned > 0 ? (
+                      <span className="font-semibold text-green-600">
+                        +{(lead.partner_earned / 100).toLocaleString()} {'\u20B8'}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground">0 {'\u20B8'}</span>
+                    )}
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+
+          {/* Desktop view - Table */}
+          <Card className="glass-card hidden sm:block">
+            <CardHeader className="pb-3">
+              <CardTitle className="text-lg flex items-center gap-2">
+                <Users className="h-5 w-5" />
+                Клиенты
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="overflow-x-auto">
+                <table className="w-full">
+                  <thead>
+                    <tr className="border-b">
+                      <th className="text-left py-3 px-2 text-sm font-medium text-muted-foreground">Email</th>
+                      <th className="text-left py-3 px-2 text-sm font-medium text-muted-foreground">Имя</th>
+                      <th className="text-left py-3 px-2 text-sm font-medium text-muted-foreground">Дата</th>
+                      <th className="text-left py-3 px-2 text-sm font-medium text-muted-foreground">Статус</th>
+                      <th className="text-right py-3 px-2 text-sm font-medium text-muted-foreground">Заработок</th>
                     </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          </CardContent>
-        </Card>
+                  </thead>
+                  <tbody>
+                    {data?.leads.map((lead) => (
+                      <tr key={lead.id} className="border-b last:border-0">
+                        <td className="py-3 px-2 text-sm">{lead.email}</td>
+                        <td className="py-3 px-2 text-sm text-muted-foreground">{lead.full_name || '-'}</td>
+                        <td className="py-3 px-2 text-sm text-muted-foreground">
+                          {lead.registered_at
+                            ? format(new Date(lead.registered_at), 'd MMM yyyy', { locale: ru })
+                            : '-'}
+                        </td>
+                        <td className="py-3 px-2">
+                          <Badge variant={lead.status === 'paid' ? 'default' : 'secondary'}>
+                            {lead.status === 'paid' ? 'Оплатил' : 'Зарегистрирован'}
+                          </Badge>
+                        </td>
+                        <td className="py-3 px-2 text-sm text-right font-medium">
+                          {lead.partner_earned > 0 ? (
+                            <span className="text-green-600">
+                              +{(lead.partner_earned / 100).toLocaleString()} {'\u20B8'}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">-</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+        </>
       )}
     </div>
   )

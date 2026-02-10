@@ -64,7 +64,7 @@ export function PriceHistoryView({ history }: PriceHistoryViewProps) {
     <div className="space-y-4">
       <div>
         <h3 className="text-sm font-medium mb-4">История изменений цен</h3>
-        <div className="border rounded-lg">
+        <div className="border rounded-lg overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -121,7 +121,7 @@ export function PriceHistoryView({ history }: PriceHistoryViewProps) {
       </div>
 
       {/* Statistics Summary */}
-      <div className="grid grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
         <div className="border rounded-lg p-4">
           <p className="text-sm text-muted-foreground">Всего изменений</p>
           <p className="text-2xl font-bold">{history.length}</p>

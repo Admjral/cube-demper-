@@ -7,7 +7,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { getReferralStats, requestPayout, ReferralStats } from '@/hooks/use-referral'
-import { Loader2, CreditCard, CheckCircle } from 'lucide-react'
+import { Loader2, CreditCard, CheckCircle, Wallet } from 'lucide-react'
 
 export default function PartnerPayoutPage() {
   const [stats, setStats] = useState<ReferralStats | null>(null)
@@ -68,20 +68,37 @@ export default function PartnerPayoutPage() {
   const availableBalance = (stats?.available_balance ?? 0) / 100
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Вывод средств</h1>
-        <p className="text-muted-foreground">
-          Доступно к выводу: {availableBalance.toLocaleString()} ₸
+        <h1 className="text-xl sm:text-2xl font-semibold">Вывод средств</h1>
+        <p className="text-sm text-muted-foreground">
+          Доступно к выводу: {availableBalance.toLocaleString()} {'\u20B8'}
         </p>
       </div>
 
+      {/* Balance card - mobile */}
+      <Card className="glass-card sm:hidden">
+        <CardContent className="p-3">
+          <div className="flex items-center gap-3">
+            <div className="p-2 rounded-full bg-primary/10 text-primary shrink-0">
+              <Wallet className="h-4 w-4" />
+            </div>
+            <div>
+              <p className="text-xs text-muted-foreground">Баланс</p>
+              <p className="text-lg font-bold text-primary">
+                {availableBalance.toLocaleString()} {'\u20B8'}
+              </p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
       {success ? (
         <Card className="glass-card">
-          <CardContent className="flex flex-col items-center justify-center py-12">
-            <CheckCircle className="h-12 w-12 text-green-500 mb-4" />
-            <p className="text-lg font-medium">Заявка отправлена!</p>
-            <p className="text-muted-foreground mt-1">
+          <CardContent className="flex flex-col items-center justify-center py-8 sm:py-12">
+            <CheckCircle className="h-10 w-10 sm:h-12 sm:w-12 text-green-500 mb-3 sm:mb-4" />
+            <p className="text-base sm:text-lg font-medium">Заявка отправлена!</p>
+            <p className="text-sm text-muted-foreground mt-1 text-center px-4">
               Выплата будет обработана в течение 24 часов
             </p>
             <Button
@@ -94,14 +111,14 @@ export default function PartnerPayoutPage() {
           </CardContent>
         </Card>
       ) : (
-        <Card className="glass-card max-w-md">
-          <CardHeader>
-            <CardTitle className="text-lg flex items-center gap-2">
-              <CreditCard className="h-5 w-5" />
+        <Card className="glass-card sm:max-w-md">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+              <CreditCard className="h-4 w-4 sm:h-5 sm:w-5" />
               Заявка на вывод
             </CardTitle>
-            <CardDescription>
-              Минимальная сумма вывода: 5 000 ₸
+            <CardDescription className="text-xs sm:text-sm">
+              Минимальная сумма вывода: 5 000 {'\u20B8'}
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -113,7 +130,7 @@ export default function PartnerPayoutPage() {
               )}
 
               <div className="space-y-2">
-                <Label htmlFor="amount">Сумма (₸)</Label>
+                <Label htmlFor="amount" className="text-sm">Сумма ({'\u20B8'})</Label>
                 <Input
                   id="amount"
                   type="number"
@@ -125,18 +142,19 @@ export default function PartnerPayoutPage() {
                   required
                 />
                 <p className="text-xs text-muted-foreground">
-                  Максимум: {availableBalance.toLocaleString()} ₸
+                  Максимум: {availableBalance.toLocaleString()} {'\u20B8'}
                 </p>
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="requisites">Реквизиты для выплаты</Label>
+                <Label htmlFor="requisites" className="text-sm">Реквизиты для выплаты</Label>
                 <Textarea
                   id="requisites"
                   placeholder="Kaspi Gold: +7 777 123 45 67 (Имя Фамилия)"
                   value={requisites}
                   onChange={(e) => setRequisites(e.target.value)}
                   required
+                  className="min-h-[80px]"
                 />
                 <p className="text-xs text-muted-foreground">
                   Укажите номер карты Kaspi или другие реквизиты
@@ -153,8 +171,8 @@ export default function PartnerPayoutPage() {
               </Button>
 
               {availableBalance < 5000 && (
-                <p className="text-sm text-muted-foreground text-center">
-                  Минимальная сумма для вывода — 5 000 ₸
+                <p className="text-xs sm:text-sm text-muted-foreground text-center">
+                  Минимальная сумма для вывода {'\u2014'} 5 000 {'\u20B8'}
                 </p>
               )}
             </form>

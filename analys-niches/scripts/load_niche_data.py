@@ -133,7 +133,10 @@ async def load_products(
 
         # Kaspi URL
         product_url = p.get("product_url", "")
-        kaspi_url = f"https://kaspi.kz{product_url}" if product_url else None
+        if product_url:
+            kaspi_url = product_url if product_url.startswith("http") else f"https://kaspi.kz{product_url}"
+        else:
+            kaspi_url = None
 
         try:
             await conn.execute(

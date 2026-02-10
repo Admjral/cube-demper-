@@ -3,6 +3,7 @@
 from typing import Optional, Set, Tuple
 from uuid import UUID
 import asyncpg
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -29,6 +30,7 @@ class FeatureAccessService:
 
     # Plan names for upgrade messages
     PLAN_NAMES = {
+        'free': 'Бесплатный',
         'basic': 'Базовый',
         'standard': 'Стандарт',
         'premium': 'Премиум',
@@ -92,17 +94,20 @@ class FeatureAccessService:
         if subscription:
             plan_code = subscription['plan_code']
             plan_name = subscription['plan_name']
-            plan_features = subscription['plan_features'] or []
+            raw_features = subscription['plan_features']
+            plan_features = json.loads(raw_features) if isinstance(raw_features, str) else (raw_features or [])
             features.update(plan_features)
             analytics_limit = subscription['plan_analytics_limit'] or subscription.get('analytics_limit', 0) or 0
             demping_limit = subscription['plan_demping_limit'] or subscription.get('demping_limit', 0) or 0
 
         # Apply add-ons
         for addon in addons:
-            addon_features = addon['addon_features'] or []
+            raw_addon_features = addon['addon_features']
+            addon_features = json.loads(raw_addon_features) if isinstance(raw_addon_features, str) else (raw_addon_features or [])
             features.update(addon_features)
 
-            extra_limits = addon['extra_limits'] or {}
+            raw_extra = addon['extra_limits']
+            extra_limits = json.loads(raw_extra) if isinstance(raw_extra, str) else (raw_extra or {})
             quantity = addon['quantity'] or 1
 
             if 'demping_limit' in extra_limits:

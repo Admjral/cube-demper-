@@ -27,6 +27,11 @@ from ..core.database import get_db_pool
 from ..core.redis import get_redis, get_online_users
 from ..core.security import get_password_hash
 from ..dependencies import get_current_admin_user
+from ..services.notification_service import notify_referral_paid
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
@@ -796,6 +801,45 @@ async def assign_subscription(
             request.notes
         )
 
+        # Auto-credit referral commission (skip free plans and trials)
+        if plan['code'] != 'free' and not is_trial and plan.get('price_tiyns', 0) > 0:
+            try:
+                referrer = await conn.fetchrow(
+                    "SELECT u.id, u.email FROM users u WHERE u.id = (SELECT referred_by FROM users WHERE id = $1)",
+                    uuid.UUID(user_id)
+                )
+                if referrer:
+                    # Get commission percent from site_settings
+                    commission_pct_row = await conn.fetchval(
+                        "SELECT value FROM site_settings WHERE key = 'referral_commission_percent'"
+                    )
+                    commission_pct = int(commission_pct_row) if commission_pct_row else 20
+                    commission_amount = int(plan['price_tiyns'] * commission_pct / 100)
+
+                    if commission_amount > 0:
+                        # Get referred user email for notification
+                        referred_email = await conn.fetchval(
+                            "SELECT email FROM users WHERE id = $1", uuid.UUID(user_id)
+                        )
+                        await conn.execute("""
+                            INSERT INTO referral_transactions
+                                (id, user_id, referred_user_id, type, amount, description, status, created_at)
+                            VALUES ($1, $2, $3, 'income', $4, $5, 'completed', NOW())
+                        """,
+                            uuid.uuid4(),
+                            referrer['id'],
+                            uuid.UUID(user_id),
+                            commission_amount,
+                            f"Комиссия {commission_pct}% за подписку {plan['code']}"
+                        )
+                        logger.info(
+                            f"[REFERRAL] Credited {commission_amount} tiyns ({commission_pct}%) "
+                            f"to referrer {referrer['id']} for user {user_id} plan {plan['code']}"
+                        )
+                        await notify_referral_paid(pool, referrer['id'], referred_email or "", commission_amount)
+            except Exception as e:
+                logger.error(f"[REFERRAL] Failed to credit commission for user {user_id}: {e}")
+
     return {
         "status": "success",
         "subscription_id": str(subscription['id']),
@@ -971,3 +1015,39 @@ async def remove_addon(
             raise HTTPException(status_code=404, detail="User does not have this add-on")
 
     return {"status": "success", "message": f"Add-on {addon_code} removed from user"}
+
+
+# --- Site settings ---
+
+@router.get("/settings")
+async def get_site_settings(
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get all site settings (admin only)"""
+    async with pool.acquire() as conn:
+        rows = await conn.fetch("SELECT key, value, updated_at FROM site_settings ORDER BY key")
+    return {row['key']: row['value'] for row in rows}
+
+
+@router.put("/settings")
+async def update_site_setting(
+    request: dict,
+    current_admin: Annotated[dict, Depends(get_current_admin_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Update a site setting (admin only)"""
+    key = request.get("key")
+    value = request.get("value")
+
+    if not key or value is None:
+        raise HTTPException(status_code=400, detail="key and value are required")
+
+    async with pool.acquire() as conn:
+        await conn.execute("""
+            INSERT INTO site_settings (key, value, updated_at)
+            VALUES ($1, $2, NOW())
+            ON CONFLICT (key) DO UPDATE SET value = $2, updated_at = NOW()
+        """, key, str(value))
+
+    return {"status": "success", "key": key, "value": str(value)}

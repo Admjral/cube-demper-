@@ -3,6 +3,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 from typing import Annotated
 import asyncpg
+import json
 import uuid
 import logging
 from datetime import datetime, timedelta
@@ -19,6 +20,7 @@ from ..dependencies import get_current_user
 from ..config import settings
 from ..services.proxy_allocator import proxy_allocator
 from ..services.proxy_provider import ensure_proxy_pool_sufficient
+from ..services.notification_service import notify_referral_paid
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -164,6 +166,41 @@ async def create_subscription(
             price_tiyns,
             subscription_request.plan
         )
+
+        # Auto-credit referral commission
+        if price_tiyns > 0:
+            try:
+                referrer = await conn.fetchrow(
+                    "SELECT u.id, u.email FROM users u WHERE u.id = (SELECT referred_by FROM users WHERE id = $1)",
+                    current_user['id']
+                )
+                if referrer:
+                    commission_pct_row = await conn.fetchval(
+                        "SELECT value FROM site_settings WHERE key = 'referral_commission_percent'"
+                    )
+                    commission_pct = int(commission_pct_row) if commission_pct_row else 20
+                    commission_amount = int(price_tiyns * commission_pct / 100)
+                    if commission_amount > 0:
+                        await conn.execute("""
+                            INSERT INTO referral_transactions
+                                (id, user_id, referred_user_id, type, amount, description, status, created_at)
+                            VALUES ($1, $2, $3, 'income', $4, $5, 'completed', NOW())
+                        """,
+                            uuid.uuid4(),
+                            referrer['id'],
+                            current_user['id'],
+                            commission_amount,
+                            f"Комиссия {commission_pct}% за подписку {subscription_request.plan}"
+                        )
+                        logger.info(
+                            f"[REFERRAL] Credited {commission_amount} tiyns to referrer {referrer['id']} "
+                            f"for user {current_user['id']} plan {subscription_request.plan}"
+                        )
+                        await notify_referral_paid(
+                            pool, referrer['id'], current_user.get('email', ''), commission_amount
+                        )
+            except Exception as e:
+                logger.error(f"[REFERRAL] Failed to credit commission: {e}")
 
     # ✅ Allocate 100 proxies to user after successful subscription
     user_id = uuid.UUID(current_user['id'])
@@ -311,7 +348,7 @@ async def get_plans_v2(
             SELECT id, code, name, price_tiyns, analytics_limit, demping_limit,
                    features, trial_days, display_order
             FROM plans
-            WHERE is_active = true
+            WHERE is_active = true AND code != 'free'
             ORDER BY display_order
         """)
 
@@ -323,7 +360,7 @@ async def get_plans_v2(
             "price": p['price_tiyns'] / 100,  # Convert to tenge
             "analytics_limit": p['analytics_limit'],
             "demping_limit": p['demping_limit'],
-            "features": p['features'],
+            "features": json.loads(p['features']) if isinstance(p['features'], str) else (p['features'] or []),
             "trial_days": p['trial_days'],
         }
         for p in plans
@@ -353,8 +390,110 @@ async def get_addons(
             "price": a['price_tiyns'] / 100,  # Convert to tenge
             "is_recurring": a['is_recurring'],
             "stackable": a['stackable'],
-            "features": a['features'],
-            "extra_limits": a['extra_limits'],
+            "features": json.loads(a['features']) if isinstance(a['features'], str) else (a['features'] or []),
+            "extra_limits": json.loads(a['extra_limits']) if isinstance(a['extra_limits'], str) else a['extra_limits'],
         }
         for a in addons
     ]
+
+
+@router.post("/activate-trial")
+async def activate_trial(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """
+    Activate a free trial of the basic plan for the current user.
+    Only works if user has never had a real plan (plan_id IS NULL).
+    """
+    user_id = current_user['id']
+
+    async with pool.acquire() as conn:
+        # Check if user already has/had a subscription with a real plan
+        existing = await conn.fetchrow("""
+            SELECT id FROM subscriptions
+            WHERE user_id = $1 AND plan_id IS NOT NULL
+            LIMIT 1
+        """, user_id)
+
+        if existing:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пробный период уже был использован"
+            )
+
+        # Anti-abuse: check if any of the user's stores (by merchant_id)
+        # have already been used for a trial on ANY account
+        store_trial_used = await conn.fetchrow("""
+            SELECT s.merchant_id
+            FROM kaspi_stores ks_current
+            JOIN kaspi_stores s ON s.merchant_id = ks_current.merchant_id
+                AND s.user_id != $1
+            JOIN subscriptions sub ON sub.user_id = s.user_id
+                AND sub.plan_id IS NOT NULL
+                AND sub.is_trial = TRUE
+            WHERE ks_current.user_id = $1
+            LIMIT 1
+        """, user_id)
+
+        if store_trial_used:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пробный период уже был использован для этого магазина"
+            )
+
+        # Get the basic plan (the only one with trial_days > 0)
+        plan = await conn.fetchrow("""
+            SELECT id, code, name, analytics_limit, demping_limit, features, trial_days
+            FROM plans
+            WHERE code = 'basic' AND is_active = true
+        """)
+
+        if not plan or plan['trial_days'] <= 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Пробный период недоступен"
+            )
+
+        now = datetime.utcnow()
+        trial_days = plan['trial_days']
+        period_end = now + timedelta(days=trial_days)
+
+        # Deactivate any existing free subscriptions
+        await conn.execute("""
+            UPDATE subscriptions SET status = 'cancelled'
+            WHERE user_id = $1 AND status = 'active'
+        """, user_id)
+
+        # Create trial subscription
+        sub_id = await conn.fetchval("""
+            INSERT INTO subscriptions (
+                user_id, plan_id, plan, status, products_limit,
+                analytics_limit, demping_limit,
+                current_period_start, current_period_end,
+                is_trial, trial_ends_at
+            ) VALUES (
+                $1, $2, $3, 'active', $4, $5, $6, $7, $8, TRUE, $8
+            )
+            RETURNING id
+        """,
+            user_id,
+            plan['id'],
+            plan['code'],
+            plan['demping_limit'],
+            plan['analytics_limit'],
+            plan['demping_limit'],
+            now,
+            period_end,
+        )
+
+        logger.info(f"[TRIAL] User {user_id} activated trial: plan={plan['code']}, days={trial_days}")
+
+        return {
+            "status": "success",
+            "subscription_id": str(sub_id),
+            "plan": plan['code'],
+            "plan_name": plan['name'],
+            "trial_days": trial_days,
+            "expires_at": period_end.isoformat(),
+        }

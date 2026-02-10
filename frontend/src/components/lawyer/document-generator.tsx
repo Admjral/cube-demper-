@@ -237,7 +237,7 @@ export function DocumentGenerator({ language }: DocumentGeneratorProps) {
                 )}
               </CardHeader>
               <CardContent>
-                <ScrollArea className="h-[400px] w-full rounded border p-4">
+                <ScrollArea className="h-[250px] sm:h-[400px] w-full rounded border p-4">
                   {generatedDoc ? (
                     <pre className="text-sm whitespace-pre-wrap font-mono">
                       {generatedDoc.content}

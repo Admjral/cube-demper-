@@ -8,6 +8,8 @@ export interface User {
   id: string
   email: string
   full_name: string | null
+  phone: string | null
+  phone_verified: boolean
   avatar_url: string | null
   role: 'user' | 'admin'
   created_at: string
@@ -112,8 +114,8 @@ class AuthClient {
   async signUp(
     email: string,
     password: string,
-    metadata?: { full_name?: string }
-  ): Promise<{ data: User | null, error: Error | null }> {
+    metadata?: { full_name?: string; phone?: string; ref_code?: string }
+  ): Promise<{ data: AuthResponse | null, error: Error | null }> {
     try {
       const response = await fetch(`${API_URL}/auth/register`, {
         method: 'POST',
@@ -121,7 +123,9 @@ class AuthClient {
         body: JSON.stringify({
           email,
           password,
-          full_name: metadata?.full_name
+          full_name: metadata?.full_name,
+          phone: metadata?.phone,
+          ref_code: metadata?.ref_code || undefined,
         })
       })
 
@@ -130,10 +134,89 @@ class AuthClient {
         return { data: null, error: new Error(error.detail || 'Ошибка регистрации') }
       }
 
-      const data: User = await response.json()
+      // Backend now returns Token (access_token + token_type)
+      const tokenData = await response.json()
+
+      // Fetch user data using the token
+      const userResponse = await fetch(`${API_URL}/auth/me`, {
+        headers: {
+          'Authorization': `Bearer ${tokenData.access_token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (!userResponse.ok) {
+        return { data: null, error: new Error('Не удалось получить данные пользователя') }
+      }
+
+      const user: User = await userResponse.json()
+      const data: AuthResponse = {
+        access_token: tokenData.access_token,
+        token_type: tokenData.token_type,
+        user
+      }
+
+      this.setAuth(data.access_token, data.user)
       return { data, error: null }
     } catch (e) {
       return { data: null, error: e as Error }
+    }
+  }
+
+  async sendOtp(): Promise<{ error: Error | null }> {
+    const token = this.getToken()
+    if (!token) return { error: new Error('Not authenticated') }
+
+    try {
+      const response = await fetch(`${API_URL}/auth/send-otp`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        }
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        return { error: new Error(error.detail || 'Ошибка отправки кода') }
+      }
+
+      return { error: null }
+    } catch (e) {
+      return { error: e as Error }
+    }
+  }
+
+  async verifyOtp(code: string): Promise<{ error: Error | null }> {
+    const token = this.getToken()
+    if (!token) return { error: new Error('Not authenticated') }
+
+    try {
+      const response = await fetch(`${API_URL}/auth/verify-otp`, {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json'
+        },
+        body: JSON.stringify({ code })
+      })
+
+      if (!response.ok) {
+        const error = await response.json()
+        return { error: new Error(error.detail || 'Неверный код') }
+      }
+
+      // Update local user data
+      const user = this.getUser()
+      if (user) {
+        user.phone_verified = true
+        this.user = user
+        localStorage.setItem(USER_KEY, JSON.stringify(user))
+      }
+
+      return { error: null }
+    } catch (e) {
+      return { error: e as Error }
     }
   }
 

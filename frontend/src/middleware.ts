@@ -1,6 +1,16 @@
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function middleware(request: NextRequest) {
+  // Force HTTPS in production (skip for Railway internal healthchecks)
+  const proto = request.headers.get('x-forwarded-proto')
+  const host = request.headers.get('host') || ''
+  const isInternalRequest = host.includes('.railway.internal') || !host.includes('.')
+  if (proto === 'http' && !isInternalRequest) {
+    const url = request.nextUrl.clone()
+    url.protocol = 'https'
+    return NextResponse.redirect(url, 301)
+  }
+
   const token = request.cookies.get('auth_token')?.value
   const partnerToken = request.cookies.get('partner_token')?.value
   const { pathname } = request.nextUrl
@@ -43,6 +53,16 @@ export async function middleware(request: NextRequest) {
     }
   }
 
+  // Verify phone - requires auth but don't redirect to dashboard
+  if (pathname.startsWith('/verify-phone')) {
+    if (!token) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/login'
+      return NextResponse.redirect(url)
+    }
+    return NextResponse.next()
+  }
+
   // Auth routes - redirect to dashboard if already authenticated
   if (
     pathname.startsWith('/login') ||
@@ -68,5 +88,6 @@ export const config = {
     '/register',
     '/forgot-password',
     '/reset-password',
+    '/verify-phone',
   ],
 }

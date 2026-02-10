@@ -3,6 +3,7 @@
 import { useEffect } from "react"
 import { useStore } from "@/store/use-store"
 import { useStores } from "@/hooks/api/use-stores"
+import { useTranslation } from "@/lib/i18n"
 import { useAuth } from "@/hooks/use-auth"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,7 +20,8 @@ import Link from "next/link"
 
 export function StoreSelector() {
   const { user } = useAuth()
-  const { selectedStore, stores, setSelectedStore, initStoresFromApi, locale } = useStore()
+  const { selectedStore, stores, setSelectedStore, initStoresFromApi } = useStore()
+  const { t } = useTranslation()
   const { data: apiStores, isLoading } = useStores()
 
   // Sync API stores with global store
@@ -44,7 +46,7 @@ export function StoreSelector() {
             <Store className="h-4 w-4 text-muted-foreground" />
           )}
           <span className="max-w-[150px] truncate text-sm font-medium">
-            {selectedStore?.name || (locale === 'ru' ? 'Выберите магазин' : 'Select store')}
+            {selectedStore?.name || t('storeSelector.select')}
           </span>
           {selectedStore?.products_count !== undefined && selectedStore.products_count > 0 && (
             <Badge variant="secondary" className="text-xs">
@@ -56,18 +58,18 @@ export function StoreSelector() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="w-[260px] glass-card">
         <DropdownMenuLabel className="text-muted-foreground">
-          {locale === 'ru' ? 'Ваши магазины' : 'Your stores'}
+          {t('storeSelector.yourStores')}
         </DropdownMenuLabel>
         <DropdownMenuSeparator />
         {!hasStores ? (
           <div className="px-2 py-4 text-center">
             <p className="text-sm text-muted-foreground mb-3">
-              {locale === 'ru' ? 'Нет подключённых магазинов' : 'No connected stores'}
+              {t('storeSelector.noStores')}
             </p>
             <Link href="/dashboard/integrations">
               <Button size="sm" variant="outline" className="w-full">
                 <Plus className="h-4 w-4 mr-2" />
-                {locale === 'ru' ? 'Добавить магазин' : 'Add store'}
+                {t('storeSelector.addStore')}
               </Button>
             </Link>
           </div>
@@ -100,7 +102,7 @@ export function StoreSelector() {
               <DropdownMenuItem className="touch-target">
                 <Plus className="h-4 w-4 mr-2 text-muted-foreground" />
                 <span className="text-muted-foreground">
-                  {locale === 'ru' ? 'Добавить магазин' : 'Add store'}
+                  {t('storeSelector.addStore')}
                 </span>
               </DropdownMenuItem>
             </Link>

@@ -44,9 +44,13 @@ export function useAuth() {
   const signUp = useCallback(async (
     email: string,
     password: string,
-    metadata?: { full_name?: string }
+    metadata?: { full_name?: string; phone?: string }
   ) => {
-    return authClient.signUp(email, password, metadata)
+    const result = await authClient.signUp(email, password, metadata)
+    if (result.data) {
+      setState({ user: result.data.user, loading: false })
+    }
+    return result
   }, [])
 
   const signOut = useCallback(async () => {
@@ -55,6 +59,20 @@ export function useAuth() {
     router.push('/login')
     return result
   }, [router])
+
+  const sendOtp = useCallback(async () => {
+    return authClient.sendOtp()
+  }, [])
+
+  const verifyOtp = useCallback(async (code: string) => {
+    const result = await authClient.verifyOtp(code)
+    if (!result.error) {
+      // Refresh user state
+      const { user } = await authClient.getCurrentUser()
+      if (user) setState({ user, loading: false })
+    }
+    return result
+  }, [])
 
   const resetPassword = useCallback(async (email: string) => {
     return authClient.resetPassword(email)
@@ -69,6 +87,8 @@ export function useAuth() {
     signIn,
     signUp,
     signOut,
+    sendOtp,
+    verifyOtp,
     resetPassword,
     updatePassword,
   }

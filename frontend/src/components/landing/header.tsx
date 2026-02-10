@@ -1,26 +1,30 @@
 'use client'
 
+import Image from 'next/image'
 import Link from 'next/link'
 import { useState } from 'react'
 import { Button } from '@/components/ui/button'
 import { ThemeToggle } from '@/components/shared/theme-toggle'
 import { Menu, X } from 'lucide-react'
-
-const navigation = [
-  { name: 'Возможности', href: '#features' },
-  { name: 'Тарифы', href: '#pricing' },
-  { name: 'FAQ', href: '#faq' },
-]
+import { useT } from '@/lib/i18n'
 
 export function Header() {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const t = useT()
+
+  const navigation = [
+    { name: t("landing.features"), href: '#features' },
+    { name: t("landing.pricing"), href: '#pricing' },
+    { name: t("landing.faq"), href: '#faq' },
+  ]
 
   return (
     <header className="fixed top-0 left-0 right-0 z-50 glass-header">
       <nav className="container mx-auto px-4 h-16 flex items-center justify-between">
         {/* Logo */}
-        <Link href="/" className="flex items-center gap-2">
-          <span className="text-xl font-bold text-foreground">Demper</span>
+        <Link href="/" className="flex items-center">
+          <Image src="/logodark.svg" alt="Demper" width={120} height={42} className="h-8 w-auto dark:hidden" priority />
+          <Image src="/logowhite.svg" alt="Demper" width={120} height={42} className="h-8 w-auto hidden dark:block" priority />
         </Link>
 
         {/* Desktop Navigation */}
@@ -41,12 +45,12 @@ export function Header() {
           <ThemeToggle />
           <Link href="/login">
             <Button variant="ghost" size="sm">
-              Войти
+              {t("landing.signIn")}
             </Button>
           </Link>
           <Link href="/register">
             <Button size="sm">
-              Начать бесплатно
+              {t("landing.startFree")}
             </Button>
           </Link>
         </div>
@@ -85,12 +89,12 @@ export function Header() {
             <hr className="border-border" />
             <Link href="/login" onClick={() => setMobileMenuOpen(false)}>
               <Button variant="ghost" className="w-full justify-start">
-                Войти
+                {t("landing.signIn")}
               </Button>
             </Link>
             <Link href="/register" onClick={() => setMobileMenuOpen(false)}>
               <Button className="w-full">
-                Начать бесплатно
+                {t("landing.startFree")}
               </Button>
             </Link>
           </div>

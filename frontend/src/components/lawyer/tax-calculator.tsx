@@ -164,7 +164,7 @@ export function TaxCalculator() {
             <CardContent>
               <div className="space-y-4">
                 {/* Summary */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="p-4 bg-muted rounded-lg">
                     <p className="text-sm text-muted-foreground">Доход</p>
                     <p className="text-xl font-semibold">{formatAmount(result.revenue)} ₸</p>
@@ -207,7 +207,7 @@ export function TaxCalculator() {
                 </div>
 
                 {/* Totals */}
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div className="p-4 bg-red-500/10 rounded-lg">
                     <p className="text-sm text-muted-foreground">Всего налогов</p>
                     <p className="text-xl font-semibold text-red-500">{formatAmount(result.total_tax)} ₸</p>

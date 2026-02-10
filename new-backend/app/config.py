@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import model_validator
 from typing import Optional
 
 
@@ -29,7 +30,7 @@ class Settings(BaseSettings):
     postgres_db: str = "cube_demper"
     postgres_user: str = "postgres"
     postgres_password: str = "postgres"
-    db_pool_min_size: Optional[int] = 2  # Reduced for faster startup
+    db_pool_min_size: Optional[int] = 5  # Balance between startup speed and availability
     db_pool_max_size: Optional[int] = 50
 
     @property
@@ -70,7 +71,7 @@ class Settings(BaseSettings):
     sync_stores_mode: str = "leader"  # "leader" or "shard"
 
     # Browser Farm
-    browser_shards: int = 2
+    browser_shards: int = 4
     max_concurrency_per_proxy: int = 8
     request_timeout_ms: int = 15000
     idle_context_ttl: int = 300
@@ -91,20 +92,15 @@ class Settings(BaseSettings):
     waha_api_key: Optional[str] = None  # API key for WAHA (if set in WAHA config)
     waha_webhook_url: Optional[str] = None  # Will use {backend_url}/whatsapp/webhook if not set
     waha_enabled: bool = True  # Enable WAHA by default for Docker deployment
-    waha_plus: bool = False  # Set to True when WAHA Plus is activated (supports multiple sessions)
-    
-    # Legacy WAHA Docker settings (kept for reference, not used with shared container)
-    waha_base_image: str = "devlikeapro/waha:latest"
-    waha_base_port: int = 3100
-    waha_network: str = "cube-demper-network"
-    waha_volume_prefix: str = "waha-user"
+    waha_plus: bool = True  # WAHA Plus activated (supports multiple sessions, NOWEB engine)
+    waha_otp_session: str = "default"  # WAHA session for OTP codes (active session on WAHA Plus)
 
     # Railway Integration (optional, for per-user WAHA containers)
     railway_api_token: Optional[str] = None
     railway_project_id: Optional[str] = None
 
     # Google Gemini (API key from env: GEMINI_API_KEY)
-    gemini_api_key: Optional[str] = "AIzaSyCUZl7oyCsP-kSly497KtcRhJz9eoIVOJ0"
+    gemini_api_key: Optional[str] = None
     gemini_model: str = "gemini-2.5-flash"  # Fast and cheap for general tasks
     gemini_lawyer_model: str = "gemini-2.5-flash"  # Model for AI Lawyer
     gemini_max_tokens: int = 4000
@@ -130,6 +126,14 @@ class Settings(BaseSettings):
     # Logging
     log_level: str = "INFO"
     log_file: str = "logs/app.log"
+
+    @model_validator(mode='after')
+    def validate_secrets(self):
+        if 'change-in-production' in self.secret_key:
+            raise ValueError("SECRET_KEY must be set via environment variable")
+        if 'fernet-compatible' in self.encryption_key:
+            raise ValueError("ENCRYPTION_KEY must be set via environment variable")
+        return self
 
 
 settings = Settings()

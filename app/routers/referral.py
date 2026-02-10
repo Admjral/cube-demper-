@@ -100,10 +100,13 @@ async def referral_leads(
                     WHEN s.id IS NOT NULL AND s.status = 'active' THEN 'paid'
                     ELSE 'registered'
                 END as status,
-                COALESCE(rt.amount, 0) as partner_earned
+                COALESCE(
+                    (SELECT SUM(rt.amount) FROM referral_transactions rt
+                     WHERE rt.referred_user_id = u.id AND rt.user_id = $1 AND rt.type = 'income'),
+                    0
+                ) as partner_earned
             FROM users u
             LEFT JOIN subscriptions s ON s.user_id = u.id AND s.status = 'active'
-            LEFT JOIN referral_transactions rt ON rt.referred_user_id = u.id AND rt.user_id = $1 AND rt.type = 'income'
             WHERE u.referred_by = $1
             ORDER BY u.created_at DESC
             LIMIT $2 OFFSET $3

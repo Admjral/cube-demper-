@@ -2,6 +2,8 @@
 
 import { useState } from "react"
 import { useStore } from "@/store/use-store"
+import { useT } from "@/lib/i18n"
+import { SubscriptionGate } from "@/components/shared/subscription-gate"
 import { useProducts, useDempingSettings, useUpdateProduct, useUpdateDempingSettings, useSyncProducts, useBulkUpdateProducts } from "@/hooks/api/use-products"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -75,22 +77,21 @@ function ProductsLoading() {
   )
 }
 
-function NoStoreSelected({ locale }: { locale: string }) {
+function NoStoreSelected() {
+  const t = useT()
   return (
     <Card className="glass-card">
       <CardContent className="p-8 text-center">
         <Store className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
         <h3 className="text-lg font-semibold mb-2">
-          {locale === "ru" ? "Выберите магазин" : "Select a store"}
+          {t("priceBot.selectStore")}
         </h3>
         <p className="text-muted-foreground mb-4">
-          {locale === "ru"
-            ? "Для управления демпингом выберите магазин или добавьте новый"
-            : "Select a store or add a new one to manage price bot"}
+          {t("priceBot.selectStoreDesc")}
         </p>
         <Link href="/dashboard/integrations">
           <Button>
-            {locale === "ru" ? "Добавить магазин" : "Add store"}
+            {t("priceBot.addStore")}
           </Button>
         </Link>
       </CardContent>
@@ -98,22 +99,21 @@ function NoStoreSelected({ locale }: { locale: string }) {
   )
 }
 
-function NoProducts({ locale }: { locale: string }) {
+function NoProducts() {
+  const t = useT()
   return (
     <Card className="glass-card">
       <CardContent className="p-8 text-center">
         <Bot className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
         <h3 className="text-lg font-semibold mb-2">
-          {locale === "ru" ? "Товары не найдены" : "No products found"}
+          {t("priceBot.noProducts")}
         </h3>
         <p className="text-muted-foreground mb-4">
-          {locale === "ru"
-            ? "Синхронизируйте магазин для загрузки товаров"
-            : "Sync your store to load products"}
+          {t("priceBot.syncDesc")}
         </p>
         <Link href="/dashboard/integrations">
           <Button>
-            {locale === "ru" ? "Синхронизировать" : "Sync store"}
+            {t("priceBot.syncStore")}
           </Button>
         </Link>
       </CardContent>
@@ -122,7 +122,8 @@ function NoProducts({ locale }: { locale: string }) {
 }
 
 export default function PriceBotPage() {
-  const { locale, selectedStore } = useStore()
+  const { selectedStore } = useStore()
+  const t = useT()
   const [searchQuery, setSearchQuery] = useState("")
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "inactive">("all")
   const [showSettingsDialog, setShowSettingsDialog] = useState(false)
@@ -136,6 +137,8 @@ export default function PriceBotPage() {
   const [formPriceStep, setFormPriceStep] = useState(1)
   const [formMinMargin, setFormMinMargin] = useState(5)
   const [formCheckInterval, setFormCheckInterval] = useState(15)
+  const [formWorkHoursStart, setFormWorkHoursStart] = useState("00:00")
+  const [formWorkHoursEnd, setFormWorkHoursEnd] = useState("23:59")
 
   const {
     data: products,
@@ -162,12 +165,10 @@ export default function PriceBotPage() {
     try {
       await syncProducts.mutateAsync(selectedStore.id)
       toast.success(
-        locale === "ru"
-          ? "Синхронизация запущена. Товары обновятся через несколько секунд."
-          : "Sync started. Products will update in a few seconds."
+        t("priceBot.syncProducts")
       )
     } catch (error) {
-      toast.error(locale === "ru" ? "Ошибка синхронизации" : "Sync failed")
+      toast.error(t("priceBot.loadingError"))
     }
   }
 
@@ -178,16 +179,12 @@ export default function PriceBotPage() {
         data: { bot_active: !product.bot_active },
       })
       toast.success(
-        locale === "ru"
-          ? product.bot_active
-            ? "Демпинг отключён"
-            : "Демпинг включён"
-          : product.bot_active
-          ? "Demping disabled"
-          : "Demping enabled"
+        product.bot_active
+          ? t("priceBot.disableDemping")
+          : t("priceBot.enableDemping")
       )
     } catch (error) {
-      toast.error(locale === "ru" ? "Ошибка обновления" : "Update failed")
+      toast.error(t("common.error"))
     }
   }
 
@@ -208,13 +205,15 @@ export default function PriceBotPage() {
           price_step: formPriceStep,
           min_margin_percent: formMinMargin,
           check_interval_minutes: formCheckInterval,
+          work_hours_start: formWorkHoursStart,
+          work_hours_end: formWorkHoursEnd,
           excluded_merchant_ids: excludedIds,
         },
       })
-      toast.success(locale === "ru" ? "Настройки сохранены" : "Settings saved")
+      toast.success(t("common.save"))
       setShowSettingsDialog(false)
     } catch (error) {
-      toast.error(locale === "ru" ? "Ошибка сохранения" : "Save failed")
+      toast.error(t("common.error"))
     }
   }
 
@@ -225,12 +224,16 @@ export default function PriceBotPage() {
       setFormPriceStep(dempingSettings.price_step ?? 1)
       setFormMinMargin(dempingSettings.min_margin_percent ?? 5)
       setFormCheckInterval(dempingSettings.check_interval_minutes ?? 15)
+      setFormWorkHoursStart(dempingSettings.work_hours_start || "00:00")
+      setFormWorkHoursEnd(dempingSettings.work_hours_end || "23:59")
       setExcludedMerchantsInput(dempingSettings.excluded_merchant_ids?.join(", ") || "")
     } else {
       setFormIsEnabled(true)
       setFormPriceStep(1)
       setFormMinMargin(5)
       setFormCheckInterval(15)
+      setFormWorkHoursStart("00:00")
+      setFormWorkHoursEnd("23:59")
       setExcludedMerchantsInput("")
     }
     setShowSettingsDialog(true)
@@ -270,34 +273,31 @@ export default function PriceBotPage() {
         bot_active: enable,
       })
       toast.success(
-        locale === "ru"
-          ? `Демпинг ${enable ? "включён" : "отключён"} для ${selectedProductIds.size} товаров`
-          : `Demping ${enable ? "enabled" : "disabled"} for ${selectedProductIds.size} products`
+        `${enable ? t("priceBot.enableDemping") : t("priceBot.disableDemping")} (${selectedProductIds.size})`
       )
       setSelectedProductIds(new Set())
     } catch (error) {
-      toast.error(locale === "ru" ? "Ошибка обновления" : "Update failed")
+      toast.error(t("common.error"))
     }
   }
 
   return (
+    <SubscriptionGate>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">
-            {locale === "ru" ? "Демпинг цен" : "Price Bot"}
+            {t("priceBot.title")}
           </h1>
           <p className="text-muted-foreground">
-            {locale === "ru"
-              ? "Автоматическое управление ценами"
-              : "Automatic price management"}
+            {t("priceBot.subtitle")}
           </p>
         </div>
         <div className="flex items-center gap-2">
           <Badge variant="secondary" className="text-sm">
             <Bot className="h-4 w-4 mr-1" />
-            {activeBotsCount} {locale === "ru" ? "активных" : "active"}
+            {activeBotsCount} {t("priceBot.active")}
           </Badge>
           <Button
             variant="outline"
@@ -309,17 +309,17 @@ export default function PriceBotPage() {
             ) : (
               <RefreshCw className="h-4 w-4 mr-2" />
             )}
-            {locale === "ru" ? "Обновить товары" : "Sync products"}
+            {t("priceBot.syncProducts")}
           </Button>
           <Button onClick={handleOpenSettingsDialog} disabled={!selectedStore}>
             <Settings2 className="h-4 w-4 mr-2" />
-            {locale === "ru" ? "Настройки" : "Settings"}
+            {t("nav.settings")}
           </Button>
         </div>
       </div>
 
       {/* No store selected */}
-      {!selectedStore && <NoStoreSelected locale={locale} />}
+      {!selectedStore && <NoStoreSelected />}
 
       {/* Content when store is selected */}
       {selectedStore && (
@@ -330,7 +330,7 @@ export default function PriceBotPage() {
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm text-muted-foreground">
-                    {locale === "ru" ? "Всего товаров" : "Total products"}
+                    {t("priceBot.totalProducts")}
                   </p>
                   <Bot className="h-4 w-4 text-muted-foreground" />
                 </div>
@@ -343,7 +343,7 @@ export default function PriceBotPage() {
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm text-muted-foreground">
-                    {locale === "ru" ? "Демпинг включён" : "Demping active"}
+                    {t("priceBot.dempingActive")}
                   </p>
                   <Play className="h-4 w-4 text-green-500" />
                 </div>
@@ -356,7 +356,7 @@ export default function PriceBotPage() {
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm text-muted-foreground">
-                    {locale === "ru" ? "Шаг цены" : "Price step"}
+                    {t("priceBot.priceStep")}
                   </p>
                   <DollarSign className="h-4 w-4 text-muted-foreground" />
                 </div>
@@ -373,7 +373,7 @@ export default function PriceBotPage() {
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm text-muted-foreground">
-                    {locale === "ru" ? "Мин. маржа" : "Min margin"}
+                    {t("priceBot.minMargin")}
                   </p>
                   <TrendingDown className="h-4 w-4 text-muted-foreground" />
                 </div>
@@ -395,7 +395,7 @@ export default function PriceBotPage() {
                 <div className="relative flex-1">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
                   <Input
-                    placeholder={locale === "ru" ? "Поиск товаров..." : "Search products..."}
+                    placeholder={t("priceBot.searchProducts")}
                     value={searchQuery}
                     onChange={(e) => setSearchQuery(e.target.value)}
                     className="pl-10"
@@ -406,17 +406,17 @@ export default function PriceBotPage() {
                   onValueChange={(v) => setStatusFilter(v as "all" | "active" | "inactive")}
                 >
                   <SelectTrigger className="w-full sm:w-[180px]">
-                    <SelectValue placeholder={locale === "ru" ? "Статус" : "Status"} />
+                    <SelectValue placeholder={t("common.status")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">
-                      {locale === "ru" ? "Все" : "All"}
+                      {t("common.all")}
                     </SelectItem>
                     <SelectItem value="active">
-                      {locale === "ru" ? "Демпинг вкл." : "Demping on"}
+                      {t("priceBot.dempingOn")}
                     </SelectItem>
                     <SelectItem value="inactive">
-                      {locale === "ru" ? "Демпинг выкл." : "Demping off"}
+                      {t("priceBot.dempingOff")}
                     </SelectItem>
                   </SelectContent>
                 </Select>
@@ -426,9 +426,7 @@ export default function PriceBotPage() {
               {selectedProductIds.size > 0 && (
                 <div className="flex items-center gap-2 mt-4 pt-4 border-t">
                   <span className="text-sm text-muted-foreground">
-                    {locale === "ru"
-                      ? `Выбрано: ${selectedProductIds.size}`
-                      : `Selected: ${selectedProductIds.size}`}
+                    {t("priceBot.selected")} {selectedProductIds.size}
                   </span>
                   <Button
                     variant="outline"
@@ -441,7 +439,7 @@ export default function PriceBotPage() {
                     ) : (
                       <Play className="h-4 w-4 mr-2" />
                     )}
-                    {locale === "ru" ? "Включить демпинг" : "Enable demping"}
+                    {t("priceBot.enableDemping")}
                   </Button>
                   <Button
                     variant="outline"
@@ -454,14 +452,14 @@ export default function PriceBotPage() {
                     ) : (
                       <Pause className="h-4 w-4 mr-2" />
                     )}
-                    {locale === "ru" ? "Отключить демпинг" : "Disable demping"}
+                    {t("priceBot.disableDemping")}
                   </Button>
                   <Button
                     variant="ghost"
                     size="sm"
                     onClick={() => setSelectedProductIds(new Set())}
                   >
-                    {locale === "ru" ? "Сбросить" : "Clear"}
+                    {t("priceBot.clear")}
                   </Button>
                 </div>
               )}
@@ -478,12 +476,10 @@ export default function PriceBotPage() {
                 <AlertCircle className="h-8 w-8 text-destructive" />
                 <div>
                   <h3 className="font-semibold">
-                    {locale === "ru" ? "Ошибка загрузки" : "Loading error"}
+                    {t("priceBot.loadingError")}
                   </h3>
                   <p className="text-sm text-muted-foreground">
-                    {locale === "ru"
-                      ? "Не удалось загрузить товары"
-                      : "Failed to load products"}
+                    {t("priceBot.loadingErrorDesc")}
                   </p>
                 </div>
               </CardContent>
@@ -492,7 +488,7 @@ export default function PriceBotPage() {
 
           {/* No products */}
           {!productsLoading && !productsError && products?.length === 0 && (
-            <NoProducts locale={locale} />
+            <NoProducts />
           )}
 
           {/* Products list - Cards on mobile, Table on desktop */}
@@ -508,26 +504,28 @@ export default function PriceBotPage() {
                   >
                     <CardContent className="p-4">
                       <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1 min-w-0">
+                        <div className="flex-1 min-w-0" >
                           <h3 className="font-medium truncate">{product.name}</h3>
                           <p className="text-sm text-muted-foreground">{product.kaspi_sku}</p>
                         </div>
-                        <Switch
-                          checked={product.bot_active}
-                          onCheckedChange={() => toggleDemping(product)}
-                          disabled={updateProduct.isPending}
-                        />
+                        <div className="p-2 -m-2" onClick={(e) => e.stopPropagation()}>
+                          <Switch
+                            checked={product.bot_active}
+                            onCheckedChange={() => toggleDemping(product)}
+                            disabled={updateProduct.isPending}
+                          />
+                        </div>
                       </div>
                       <div className="mt-4 grid grid-cols-2 gap-4">
                         <div>
                           <p className="text-xs text-muted-foreground">
-                            {locale === "ru" ? "Текущая цена" : "Current price"}
+                            {t("priceBot.currentPrice")}
                           </p>
                           <p className="font-semibold">{formatPrice(product.price)}</p>
                         </div>
                         <div>
                           <p className="text-xs text-muted-foreground">
-                            {locale === "ru" ? "Мин. прибыль" : "Min profit"}
+                            {t("priceBot.minProfit")}
                           </p>
                           <p className="text-sm">{formatPrice(product.min_profit)}</p>
                         </div>
@@ -535,12 +533,8 @@ export default function PriceBotPage() {
                       <div className="mt-4 flex items-center justify-between">
                         <Badge variant={product.bot_active ? "default" : "secondary"}>
                           {product.bot_active
-                            ? locale === "ru"
-                              ? "Демпинг вкл."
-                              : "Demping on"
-                            : locale === "ru"
-                            ? "Демпинг выкл."
-                            : "Demping off"}
+                            ? t("priceBot.dempingOn")
+                            : t("priceBot.dempingOff")}
                         </Badge>
                         <Badge variant="outline">
                           {product.kaspi_sku || "N/A"}
@@ -562,23 +556,23 @@ export default function PriceBotPage() {
                             <Checkbox
                               checked={isAllSelected}
                               onCheckedChange={toggleSelectAll}
-                              aria-label={locale === "ru" ? "Выбрать все" : "Select all"}
+                              aria-label={t("priceBot.selectAll")}
                             />
                           </th>
                           <th className="text-left p-4 text-sm font-medium text-muted-foreground">
-                            {locale === "ru" ? "Товар" : "Product"}
+                            {t("priceBot.product")}
                           </th>
                           <th className="text-left p-4 text-sm font-medium text-muted-foreground">
-                            {locale === "ru" ? "Цена" : "Price"}
+                            {t("priceBot.price")}
                           </th>
                           <th className="text-left p-4 text-sm font-medium text-muted-foreground">
-                            {locale === "ru" ? "Мин. прибыль" : "Min profit"}
+                            {t("priceBot.minProfit")}
                           </th>
                           <th className="text-center p-4 text-sm font-medium text-muted-foreground">
-                            {locale === "ru" ? "Артикул" : "SKU"}
+                            {t("priceBot.sku")}
                           </th>
                           <th className="text-center p-4 text-sm font-medium text-muted-foreground">
-                            {locale === "ru" ? "Демпинг" : "Demping"}
+                            {t("priceBot.demping")}
                           </th>
                         </tr>
                       </thead>
@@ -594,7 +588,7 @@ export default function PriceBotPage() {
                               <Checkbox
                                 checked={selectedProductIds.has(product.id)}
                                 onCheckedChange={() => toggleSelectProduct(product.id)}
-                                aria-label={locale === "ru" ? "Выбрать товар" : "Select product"}
+                                aria-label={t("priceBot.selectProduct")}
                               />
                             </td>
                             <td className="p-4" onClick={() => setSelectedProductId(product.id)}>
@@ -642,12 +636,10 @@ export default function PriceBotPage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              {locale === "ru" ? "Настройки демпинга" : "Demping Settings"}
+              {t("priceBot.settingsTitle")}
             </DialogTitle>
             <DialogDescription>
-              {locale === "ru"
-                ? "Настройте параметры автоматического демпинга цен"
-                : "Configure automatic price demping parameters"}
+              {t("priceBot.settingsDesc")}
             </DialogDescription>
           </DialogHeader>
 
@@ -655,7 +647,7 @@ export default function PriceBotPage() {
             <div className="space-y-4 py-4">
               <div className="flex items-center justify-between">
                 <Label htmlFor="demping-enabled">
-                  {locale === "ru" ? "Автодемпинг включён" : "Auto-demping enabled"}
+                  {t("priceBot.autoEnabled")}
                 </Label>
                 <Switch
                   id="demping-enabled"
@@ -666,7 +658,7 @@ export default function PriceBotPage() {
 
               <div className="space-y-2">
                 <Label htmlFor="price-step">
-                  {locale === "ru" ? "Шаг снижения цены (₸)" : "Price step (₸)"}
+                  {t("priceBot.stepLabel")}
                 </Label>
                 <Input
                   id="price-step"
@@ -679,7 +671,7 @@ export default function PriceBotPage() {
 
               <div className="space-y-2">
                 <Label htmlFor="min-margin">
-                  {locale === "ru" ? "Минимальная маржа (%)" : "Minimum margin (%)"}
+                  {t("priceBot.marginLabel")}
                 </Label>
                 <Input
                   id="min-margin"
@@ -693,9 +685,7 @@ export default function PriceBotPage() {
 
               <div className="space-y-2">
                 <Label htmlFor="check-interval">
-                  {locale === "ru"
-                    ? "Интервал проверки (минут)"
-                    : "Check interval (minutes)"}
+                  {t("priceBot.intervalLabel")}
                 </Label>
                 <Input
                   id="check-interval"
@@ -708,50 +698,42 @@ export default function PriceBotPage() {
 
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
-                  <Label htmlFor="work-start" className="text-muted-foreground">
-                    {locale === "ru" ? "Начало работы" : "Work start"}
+                  <Label htmlFor="work-start">
+                    {t("priceBot.workStart")}
                   </Label>
                   <Input
                     id="work-start"
                     type="time"
-                    value={dempingSettings.work_hours_start || "00:00"}
-                    disabled
-                    className="bg-muted"
+                    value={formWorkHoursStart}
+                    onChange={(e) => setFormWorkHoursStart(e.target.value)}
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="work-end" className="text-muted-foreground">
-                    {locale === "ru" ? "Конец работы" : "Work end"}
+                  <Label htmlFor="work-end">
+                    {t("priceBot.workEnd")}
                   </Label>
                   <Input
                     id="work-end"
                     type="time"
-                    value={dempingSettings.work_hours_end || "23:59"}
-                    disabled
-                    className="bg-muted"
+                    value={formWorkHoursEnd}
+                    onChange={(e) => setFormWorkHoursEnd(e.target.value)}
                   />
                 </div>
               </div>
 
               <div className="space-y-2">
                 <Label htmlFor="excluded-merchants">
-                  {locale === "ru" 
-                    ? "Исключённые магазины (не конкурировать с ними)" 
-                    : "Excluded stores (don't compete with them)"}
+                  {t("priceBot.excludedStores")}
                 </Label>
                 <Textarea
                   id="excluded-merchants"
-                  placeholder={locale === "ru" 
-                    ? "Введите ID магазинов через запятую или с новой строки" 
-                    : "Enter store IDs separated by comma or newline"}
+                  placeholder={t("priceBot.excludedStoresPlaceholder")}
                   value={excludedMerchantsInput}
                   onChange={(e) => setExcludedMerchantsInput(e.target.value)}
                   rows={3}
                 />
                 <p className="text-xs text-muted-foreground">
-                  {locale === "ru"
-                    ? "Укажите merchant ID магазинов, с которыми не нужно конкурировать (например, ваши собственные магазины)"
-                    : "Enter merchant IDs of stores you don't want to compete with (e.g., your own stores)"}
+                  {t("priceBot.excludedStoresHint")}
                 </p>
               </div>
             </div>
@@ -759,7 +741,7 @@ export default function PriceBotPage() {
 
           <DialogFooter>
             <Button variant="outline" onClick={() => setShowSettingsDialog(false)}>
-              {locale === "ru" ? "Отмена" : "Cancel"}
+              {t("common.cancel2")}
             </Button>
             <Button
               onClick={saveGlobalSettings}
@@ -768,7 +750,7 @@ export default function PriceBotPage() {
               {updateDempingSettings.isPending && (
                 <Loader2 className="h-4 w-4 mr-2 animate-spin" />
               )}
-              {locale === "ru" ? "Сохранить" : "Save"}
+              {t("common.save")}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -781,5 +763,6 @@ export default function PriceBotPage() {
         onOpenChange={(open) => !open && setSelectedProductId(null)}
       />
     </div>
+    </SubscriptionGate>
   )
 }

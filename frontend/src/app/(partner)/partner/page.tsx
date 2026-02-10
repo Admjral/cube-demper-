@@ -12,13 +12,14 @@ import {
   Copy,
   Check,
   Loader2,
+  Share2,
 } from 'lucide-react'
 
 export default function PartnerDashboardPage() {
   const [stats, setStats] = useState<ReferralStats | null>(null)
   const [linkData, setLinkData] = useState<ReferralLink | null>(null)
   const [loading, setLoading] = useState(true)
-  const [copied, setCopied] = useState(false)
+  const [copied, setCopied] = useState<'link' | 'code' | null>(null)
 
   useEffect(() => {
     async function fetchData() {
@@ -38,10 +39,10 @@ export default function PartnerDashboardPage() {
     fetchData()
   }, [])
 
-  const copyToClipboard = async (text: string) => {
+  const copyToClipboard = async (text: string, type: 'link' | 'code') => {
     await navigator.clipboard.writeText(text)
-    setCopied(true)
-    setTimeout(() => setCopied(false), 2000)
+    setCopied(type)
+    setTimeout(() => setCopied(null), 2000)
   }
 
   if (loading) {
@@ -52,79 +53,98 @@ export default function PartnerDashboardPage() {
     )
   }
 
-  const statCards = [
-    {
-      title: 'Клики по ссылке',
-      value: stats?.clicks ?? 0,
-      icon: MousePointer,
-      color: 'text-blue-500',
-    },
-    {
-      title: 'Регистрации',
-      value: stats?.registrations ?? 0,
-      icon: UserPlus,
-      color: 'text-green-500',
-    },
-    {
-      title: 'Оплатили',
-      value: stats?.paid_users ?? 0,
-      icon: CreditCard,
-      color: 'text-purple-500',
-    },
-    {
-      title: 'Доступно к выводу',
-      value: `${((stats?.available_balance ?? 0) / 100).toLocaleString()} ₸`,
-      icon: Wallet,
-      color: 'text-orange-500',
-    },
-  ]
-
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 sm:space-y-6">
       <div>
-        <h1 className="text-2xl font-semibold">Реферальная программа</h1>
-        <p className="text-muted-foreground">Приглашайте друзей и зарабатывайте</p>
+        <h1 className="text-xl sm:text-2xl font-semibold">Реферальная программа</h1>
+        <p className="text-sm text-muted-foreground">Приглашайте друзей и зарабатывайте</p>
       </div>
 
-      {/* Referral Link */}
+      {/* Referral Link & Code */}
       <Card className="glass-card">
-        <CardHeader>
-          <CardTitle className="text-lg">Ваша реферальная ссылка</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base sm:text-lg flex items-center gap-2">
+            <Share2 className="h-4 w-4 sm:h-5 sm:w-5" />
+            Ваша ссылка и промокод
+          </CardTitle>
         </CardHeader>
-        <CardContent>
-          <div className="flex gap-2">
-            <code className="flex-1 px-3 py-2 bg-muted rounded-lg text-sm overflow-x-auto">
-              {linkData?.referral_link || 'Загрузка...'}
-            </code>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => linkData?.referral_link && copyToClipboard(linkData.referral_link)}
-              disabled={!linkData?.referral_link}
-            >
-              {copied ? <Check className="h-4 w-4" /> : <Copy className="h-4 w-4" />}
-            </Button>
+        <CardContent className="space-y-3">
+          {/* Link */}
+          <div className="space-y-1.5">
+            <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Ссылка</p>
+            <div className="flex gap-2">
+              <code className="flex-1 px-3 py-2 bg-muted rounded-lg text-xs sm:text-sm overflow-x-auto break-all leading-relaxed">
+                {linkData?.referral_link || 'Загрузка...'}
+              </code>
+              <Button
+                variant="outline"
+                size="icon"
+                className="shrink-0 h-9 w-9"
+                onClick={() => linkData?.referral_link && copyToClipboard(linkData.referral_link, 'link')}
+                disabled={!linkData?.referral_link}
+              >
+                {copied === 'link' ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+              </Button>
+            </div>
           </div>
+
+          {/* Promo code */}
           {linkData?.promo_code && (
-            <p className="mt-2 text-sm text-muted-foreground">
-              Промокод: <span className="font-mono font-medium">{linkData.promo_code}</span>
-            </p>
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground font-medium uppercase tracking-wide">Промокод</p>
+              <div className="flex gap-2 items-center">
+                <code className="px-3 py-2 bg-muted rounded-lg text-sm sm:text-base font-mono font-bold tracking-widest">
+                  {linkData.promo_code}
+                </code>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  className="shrink-0 h-9 w-9"
+                  onClick={() => copyToClipboard(linkData.promo_code!, 'code')}
+                >
+                  {copied === 'code' ? <Check className="h-4 w-4 text-green-500" /> : <Copy className="h-4 w-4" />}
+                </Button>
+              </div>
+            </div>
           )}
         </CardContent>
       </Card>
 
       {/* Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-        {statCards.map((stat) => (
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 sm:gap-4">
+        {[
+          {
+            title: 'Клики',
+            value: stats?.clicks ?? 0,
+            icon: MousePointer,
+            color: 'text-blue-500',
+          },
+          {
+            title: 'Регистрации',
+            value: stats?.registrations ?? 0,
+            icon: UserPlus,
+            color: 'text-green-500',
+          },
+          {
+            title: 'Оплатили',
+            value: stats?.paid_users ?? 0,
+            icon: CreditCard,
+            color: 'text-purple-500',
+          },
+          {
+            title: 'К выводу',
+            value: `${((stats?.available_balance ?? 0) / 100).toLocaleString()} \u20B8`,
+            icon: Wallet,
+            color: 'text-orange-500',
+          },
+        ].map((stat) => (
           <Card key={stat.title} className="glass-card">
-            <CardHeader className="flex flex-row items-center justify-between pb-2">
-              <CardTitle className="text-sm font-medium text-muted-foreground">
-                {stat.title}
-              </CardTitle>
-              <stat.icon className={`h-4 w-4 ${stat.color}`} />
-            </CardHeader>
-            <CardContent>
-              <div className="text-2xl font-bold">{stat.value}</div>
+            <CardContent className="p-3 sm:p-4">
+              <div className="flex items-center justify-between mb-1 sm:mb-2">
+                <span className="text-xs sm:text-sm text-muted-foreground">{stat.title}</span>
+                <stat.icon className={`h-3.5 w-3.5 sm:h-4 sm:w-4 ${stat.color}`} />
+              </div>
+              <p className="text-lg sm:text-2xl font-bold">{stat.value}</p>
             </CardContent>
           </Card>
         ))}
@@ -132,27 +152,27 @@ export default function PartnerDashboardPage() {
 
       {/* Earnings Summary */}
       <Card className="glass-card">
-        <CardHeader>
-          <CardTitle className="text-lg">Заработок</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base sm:text-lg">Заработок</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-sm text-muted-foreground">Всего заработано</p>
-              <p className="text-xl font-semibold mt-1">
-                {((stats?.total_earned ?? 0) / 100).toLocaleString()} ₸
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="p-3 sm:p-4 bg-muted/50 rounded-lg">
+              <p className="text-xs sm:text-sm text-muted-foreground">Всего заработано</p>
+              <p className="text-lg sm:text-xl font-semibold mt-0.5">
+                {((stats?.total_earned ?? 0) / 100).toLocaleString()} {'\u20B8'}
               </p>
             </div>
-            <div className="p-4 bg-muted/50 rounded-lg">
-              <p className="text-sm text-muted-foreground">Выведено</p>
-              <p className="text-xl font-semibold mt-1">
-                {((stats?.total_withdrawn ?? 0) / 100).toLocaleString()} ₸
+            <div className="p-3 sm:p-4 bg-muted/50 rounded-lg">
+              <p className="text-xs sm:text-sm text-muted-foreground">Выведено</p>
+              <p className="text-lg sm:text-xl font-semibold mt-0.5">
+                {((stats?.total_withdrawn ?? 0) / 100).toLocaleString()} {'\u20B8'}
               </p>
             </div>
-            <div className="p-4 bg-primary/10 rounded-lg">
-              <p className="text-sm text-primary">Доступно к выводу</p>
-              <p className="text-xl font-semibold mt-1 text-primary">
-                {((stats?.available_balance ?? 0) / 100).toLocaleString()} ₸
+            <div className="p-3 sm:p-4 bg-primary/10 rounded-lg">
+              <p className="text-xs sm:text-sm text-primary">Доступно к выводу</p>
+              <p className="text-lg sm:text-xl font-semibold mt-0.5 text-primary">
+                {((stats?.available_balance ?? 0) / 100).toLocaleString()} {'\u20B8'}
               </p>
             </div>
           </div>
@@ -161,31 +181,37 @@ export default function PartnerDashboardPage() {
 
       {/* How it works */}
       <Card className="glass-card">
-        <CardHeader>
-          <CardTitle className="text-lg">Как это работает?</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base sm:text-lg">Как это работает?</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-            <div className="p-4 border rounded-lg">
-              <div className="text-2xl font-bold text-primary mb-2">1</div>
-              <p className="font-medium">Поделитесь ссылкой</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Отправьте реферальную ссылку друзьям или разместите в соцсетях
-              </p>
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+            <div className="flex sm:flex-col items-start gap-3 sm:gap-0 p-3 sm:p-4 border rounded-lg">
+              <div className="text-xl sm:text-2xl font-bold text-primary shrink-0">1</div>
+              <div>
+                <p className="font-medium text-sm sm:text-base">Поделитесь ссылкой</p>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+                  Отправьте ссылку или промокод друзьям
+                </p>
+              </div>
             </div>
-            <div className="p-4 border rounded-lg">
-              <div className="text-2xl font-bold text-primary mb-2">2</div>
-              <p className="font-medium">Друг регистрируется</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Когда кто-то переходит по ссылке и регистрируется, он становится вашим рефералом
-              </p>
+            <div className="flex sm:flex-col items-start gap-3 sm:gap-0 p-3 sm:p-4 border rounded-lg">
+              <div className="text-xl sm:text-2xl font-bold text-primary shrink-0">2</div>
+              <div>
+                <p className="font-medium text-sm sm:text-base">Друг регистрируется</p>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+                  Он вводит ваш промокод при регистрации
+                </p>
+              </div>
             </div>
-            <div className="p-4 border rounded-lg">
-              <div className="text-2xl font-bold text-primary mb-2">3</div>
-              <p className="font-medium">Получайте комиссию</p>
-              <p className="text-sm text-muted-foreground mt-1">
-                Вы получаете 20% от каждой оплаты вашего реферала
-              </p>
+            <div className="flex sm:flex-col items-start gap-3 sm:gap-0 p-3 sm:p-4 border rounded-lg">
+              <div className="text-xl sm:text-2xl font-bold text-primary shrink-0">3</div>
+              <div>
+                <p className="font-medium text-sm sm:text-base">Получайте комиссию</p>
+                <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
+                  Вы получаете % от каждой оплаты реферала
+                </p>
+              </div>
             </div>
           </div>
         </CardContent>

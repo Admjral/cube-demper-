@@ -1,6 +1,7 @@
 "use client"
 
 import { useState } from "react"
+import { SubscriptionGate } from "@/components/shared/subscription-gate"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Button } from "@/components/ui/button"
@@ -94,6 +95,7 @@ export default function AILawyerPage() {
   // If a feature is selected, show its content
   if (activeTab) {
     return (
+      <SubscriptionGate>
       <div className="h-[calc(100vh-12rem)] lg:h-[calc(100vh-8rem)] flex flex-col">
         {/* Header */}
         <div className="mb-4 flex items-center justify-between">
@@ -128,11 +130,13 @@ export default function AILawyerPage() {
           Powered by Gemini AI. Не заменяет консультацию профессионального юриста.
         </p>
       </div>
+      </SubscriptionGate>
     )
   }
 
   // Main menu
   return (
+    <SubscriptionGate>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex items-center justify-between">
@@ -198,6 +202,7 @@ export default function AILawyerPage() {
         Powered by Gemini AI. Не заменяет консультацию профессионального юриста.
       </p>
     </div>
+    </SubscriptionGate>
   )
 }
 

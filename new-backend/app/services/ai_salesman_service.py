@@ -401,7 +401,7 @@ async def process_order_for_upsell(
 
         # 2. Получаем товары заказа
         items = await conn.fetch("""
-            SELECT oi.*, p.category, p.sku as product_sku
+            SELECT oi.*, p.category, p.kaspi_sku as product_sku
             FROM order_items oi
             LEFT JOIN products p ON oi.product_id = p.id
             WHERE oi.order_id = $1
@@ -423,7 +423,7 @@ async def process_order_for_upsell(
 
         # 4. Получаем каталог магазина для допродажи
         catalog = await conn.fetch("""
-            SELECT p.id, p.name, p.sku, p.price, p.category
+            SELECT p.id, p.name, p.kaspi_sku, p.price, p.category
             FROM products p
             WHERE p.store_id = $1 AND p.is_active = TRUE
             ORDER BY p.sales_count DESC NULLS LAST
@@ -442,6 +442,17 @@ async def process_order_for_upsell(
         # Проверяем включен ли ИИ для магазина
         if shop_settings and not shop_settings.get('ai_enabled', True):
             logger.info("AI disabled for store %s", order['store_id'])
+            return None
+
+        # Проверяем дневной лимит сообщений
+        max_per_day = (shop_settings.get('ai_max_messages_per_day') or 50) if shop_settings else 50
+        today_count = await conn.fetchval("""
+            SELECT COUNT(*) FROM ai_salesman_messages
+            WHERE store_id = $1 AND created_at >= CURRENT_DATE
+        """, order['store_id'])
+
+        if today_count >= max_per_day:
+            logger.info("Daily message limit (%d) reached for store %s", max_per_day, order['store_id'])
             return None
 
         # 6. Формируем контекст
@@ -477,6 +488,12 @@ async def process_order_for_upsell(
 
         # 8. Отправляем в WhatsApp если нужно
         if send_message and message.text:
+            # Валидация телефона: минимум 10 цифр
+            phone_digits = "".join(filter(str.isdigit, customer_phone))
+            if len(phone_digits) < 10:
+                logger.warning("Invalid phone number for order %s: %s", order_id, customer_phone)
+                return message
+
             try:
                 # Проверяем есть ли активная WhatsApp сессия у пользователя
                 wa_session = await conn.fetchrow("""
@@ -503,8 +520,8 @@ async def process_order_for_upsell(
                     # Сохраняем в историю
                     await conn.execute("""
                         INSERT INTO ai_salesman_messages
-                        (order_id, store_id, customer_phone, trigger_type, message_text, products_suggested)
-                        VALUES ($1, $2, $3, $4, $5, $6)
+                        (order_id, store_id, customer_phone, trigger_type, message_text, products_suggested, sent_at)
+                        VALUES ($1, $2, $3, $4, $5, $6, NOW())
                     """, order_id, order['store_id'], customer_phone,
                         message.trigger.value, message.text, message.products_suggested)
 

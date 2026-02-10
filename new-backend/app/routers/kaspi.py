@@ -95,6 +95,18 @@ async def authenticate_store(
         - Success: { "status": "success", "store_id": "...", "merchant_id": "..." }
         - SMS Required: { "status": "sms_required", "merchant_id": "..." }
     """
+    # Check store limit: 1 store per account
+    async with pool.acquire() as conn:
+        store_count = await conn.fetchval(
+            "SELECT COUNT(*) FROM kaspi_stores WHERE user_id = $1 AND is_active = TRUE",
+            current_user['id']
+        )
+        if store_count >= 1:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="Лимит магазинов: 1 магазин на аккаунт"
+            )
+
     try:
         # Attempt authentication
         session_data = await authenticate_kaspi(
@@ -111,6 +123,17 @@ async def authenticate_store(
         # Store in database (wrap encrypted string in JSON object)
         # Also store email/password separately for auto-reauthentication
         async with pool.acquire() as conn:
+            # Check if merchant_id already belongs to another user
+            existing_owner = await conn.fetchval(
+                "SELECT user_id FROM kaspi_stores WHERE merchant_id = $1",
+                merchant_id
+            )
+            if existing_owner and str(existing_owner) != current_user['id']:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Этот магазин уже подключён к другому аккаунту"
+                )
+
             # Try with new columns first, fallback to old schema
             try:
                 store = await conn.fetchrow(
@@ -322,9 +345,9 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                     """
                     INSERT INTO products (
                         store_id, kaspi_product_id, kaspi_sku, external_kaspi_id,
-                        name, price, availabilities, bot_active
+                        name, price, availabilities, bot_active, category
                     )
-                    VALUES ($1, $2, $3, $4, $5, $6, $7, false)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, false, $8)
                     ON CONFLICT (store_id, kaspi_product_id)
                     DO UPDATE SET
                         name = $5,
@@ -332,6 +355,7 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                         availabilities = $7,
                         kaspi_sku = COALESCE($3, products.kaspi_sku),
                         external_kaspi_id = COALESCE($4, products.external_kaspi_id),
+                        category = COALESCE($8, products.category),
                         updated_at = NOW()
                     """,
                     uuid.UUID(store_id),
@@ -340,7 +364,8 @@ async def _sync_store_products_task(store_id: str, merchant_id: str):
                     product_data.get('external_kaspi_id'),
                     product_data['name'],
                     product_data['price'],
-                    availabilities
+                    availabilities,
+                    product_data.get('category'),
                 )
 
             # Update store products count and last sync
@@ -1517,34 +1542,24 @@ async def sync_store_orders(
 
 
 async def _sync_store_orders_task(store_id: str, merchant_id: str, days_back: int = 30):
-    """Background task to sync store orders from Kaspi API"""
-    from ..services.api_parser import fetch_orders, sync_orders_to_db
-    from ..services.kaspi_auth_service import get_active_session_with_refresh
+    """Background task to sync store orders from Kaspi MC GraphQL"""
+    from ..services.api_parser import sync_orders_to_db
+    from ..services.kaspi_mc_service import get_kaspi_mc_service, KaspiMCError
 
     try:
         logger.info(f"Starting orders sync for store {store_id}, merchant {merchant_id}")
 
-        # Get session with auto-refresh
-        session = await get_active_session_with_refresh(merchant_id)
-        if not session:
-            logger.error(f"No valid session for merchant {merchant_id}")
-            return
-
-        # Fetch completed orders from Kaspi
-        orders = await fetch_orders(
-            merchant_id=merchant_id,
-            session=session,
-            status="ARCHIVE",  # Completed orders
-            days_back=days_back
-        )
+        mc = get_kaspi_mc_service()
+        orders = await mc.fetch_orders_for_sync(merchant_id=merchant_id, limit=200)
 
         if orders:
-            # Sync to database
             result = await sync_orders_to_db(store_id, orders)
             logger.info(f"Orders sync complete for store {store_id}: {result}")
         else:
             logger.info(f"No orders found for store {store_id}")
 
+    except KaspiMCError as e:
+        logger.error(f"MC error syncing orders for store {store_id}: {e}")
     except Exception as e:
         logger.error(f"Error syncing orders for store {store_id}: {e}")
 

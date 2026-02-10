@@ -1,6 +1,6 @@
 'use client'
 
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query'
 import { api } from '@/lib/api'
 import { useAuth } from '@/hooks/use-auth'
 
@@ -135,4 +135,24 @@ export const FEATURE_UPGRADE_INFO: Record<string, {
  */
 export function getFeatureUpgradeMessage(feature: string): string {
   return FEATURE_UPGRADE_INFO[feature]?.message ?? 'Функция недоступна для вашего тарифа'
+}
+
+/**
+ * Activate free trial of basic plan.
+ */
+export function useActivateTrial() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: () => api.post<{
+      status: string
+      plan: string
+      plan_name: string
+      trial_days: number
+      expires_at: string
+    }>('/billing/activate-trial', {}),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: featureKeys.user() })
+    },
+  })
 }

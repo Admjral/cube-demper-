@@ -37,6 +37,7 @@ import {
   useAssignSubscription,
   useAssignAddon,
   useRemoveAddon,
+  useCancelSubscription,
 } from '@/hooks/api/use-admin'
 import { usePlansV2, useAddons } from '@/hooks/api/use-features'
 import {
@@ -70,6 +71,7 @@ export default function AdminUsersPage() {
     days: 30,
     isTrial: false,
     notes: '',
+    endsAt: '',
   })
   const [addonForm, setAddonForm] = useState({
     addonCode: '',
@@ -92,6 +94,7 @@ export default function AdminUsersPage() {
   const assignSubscription = useAssignSubscription()
   const assignAddon = useAssignAddon()
   const removeAddon = useRemoveAddon()
+  const cancelSubscription = useCancelSubscription()
 
   const users = data?.users ?? []
   const total = data?.total ?? 0
@@ -136,7 +139,7 @@ export default function AdminUsersPage() {
 
   const openSubscriptionDialog = (userId: string) => {
     setSelectedUserId(userId)
-    setSubscriptionForm({ planCode: '', days: 30, isTrial: false, notes: '' })
+    setSubscriptionForm({ planCode: '', days: 30, isTrial: false, notes: '', endsAt: '' })
     setAddonForm({ addonCode: '', quantity: 1, days: 30 })
     setShowSubscriptionDialog(true)
   }
@@ -150,11 +153,23 @@ export default function AdminUsersPage() {
         days: subscriptionForm.days,
         isTrial: subscriptionForm.isTrial,
         notes: subscriptionForm.notes || undefined,
+        endsAt: subscriptionForm.endsAt ? new Date(subscriptionForm.endsAt).toISOString() : undefined,
       })
       toast.success('Подписка назначена')
-      setSubscriptionForm({ planCode: '', days: 30, isTrial: false, notes: '' })
+      setSubscriptionForm({ planCode: '', days: 30, isTrial: false, notes: '', endsAt: '' })
     } catch {
       toast.error('Ошибка назначения подписки')
+    }
+  }
+
+  const handleCancelSubscription = async () => {
+    if (!selectedUserId) return
+    if (!confirm('Отменить подписку пользователя?')) return
+    try {
+      await cancelSubscription.mutateAsync(selectedUserId)
+      toast.success('Подписка отменена')
+    } catch {
+      toast.error('Ошибка отмены подписки')
     }
   }
 
@@ -510,6 +525,20 @@ export default function AdminUsersPage() {
                         </span>
                       </div>
                     )}
+                    {subscriptionDetails.subscription.status === 'active' && (
+                      <div className="pt-3 border-t">
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          className="w-full"
+                          onClick={handleCancelSubscription}
+                          disabled={cancelSubscription.isPending}
+                        >
+                          {cancelSubscription.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+                          Отменить подписку
+                        </Button>
+                      </div>
+                    )}
                   </CardContent>
                 </Card>
               )}
@@ -569,7 +598,7 @@ export default function AdminUsersPage() {
                         <SelectContent>
                           {plans?.map((plan) => (
                             <SelectItem key={plan.id} value={plan.code}>
-                              {plan.name} — {(plan.price / 100).toLocaleString()} ₸
+                              {plan.name} — {plan.price.toLocaleString()} ₸
                             </SelectItem>
                           ))}
                         </SelectContent>
@@ -581,9 +610,22 @@ export default function AdminUsersPage() {
                         type="number"
                         min={1}
                         value={subscriptionForm.days}
-                        onChange={(e) => setSubscriptionForm({ ...subscriptionForm, days: parseInt(e.target.value) || 30 })}
+                        onChange={(e) => setSubscriptionForm({ ...subscriptionForm, days: parseInt(e.target.value) || 30, endsAt: '' })}
                       />
                     </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Или дата окончания</Label>
+                    <Input
+                      type="date"
+                      value={subscriptionForm.endsAt}
+                      onChange={(e) => setSubscriptionForm({ ...subscriptionForm, endsAt: e.target.value, days: 0 })}
+                    />
+                    {subscriptionForm.endsAt && (
+                      <p className="text-xs text-muted-foreground">
+                        Дата окончания имеет приоритет над количеством дней
+                      </p>
+                    )}
                   </div>
                   <div className="flex items-center gap-4">
                     <label className="flex items-center gap-2 cursor-pointer">
@@ -634,7 +676,7 @@ export default function AdminUsersPage() {
                         <SelectContent>
                           {addons?.map((addon) => (
                             <SelectItem key={addon.id} value={addon.code}>
-                              {addon.name} — {(addon.price / 100).toLocaleString()} ₸
+                              {addon.name} — {addon.price.toLocaleString()} ₸
                             </SelectItem>
                           ))}
                         </SelectContent>

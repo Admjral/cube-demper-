@@ -12,6 +12,7 @@ import {
   Store,
   ArrowLeft,
   MessageSquare,
+  Settings,
 } from 'lucide-react'
 
 const navigation = [
@@ -21,6 +22,7 @@ const navigation = [
   { name: 'Подписки', href: '/admin/subscriptions', icon: Repeat },
   { name: 'Магазины', href: '/admin/stores', icon: Store },
   { name: 'Поддержка', href: '/admin/support', icon: MessageSquare },
+  { name: 'Настройки', href: '/admin/settings', icon: Settings },
 ]
 
 export default function AdminLayout({

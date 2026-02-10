@@ -1,7 +1,9 @@
 "use client"
 
 import { useState } from "react"
-import { useStore } from "@/store/use-store"
+import Image from "next/image"
+import { useT } from "@/lib/i18n"
+import { SubscriptionGate } from "@/components/shared/subscription-gate"
 import { useNicheSearch, useNicheCategories } from "@/hooks/api/use-niche-search"
 import type { NicheSearchParams, NicheProduct } from "@/types/api"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
@@ -49,28 +51,18 @@ function formatPrice(price: number): string {
   return new Intl.NumberFormat('ru-KZ').format(price) + ' ₸'
 }
 
-function formatNumber(num: number): string {
-  if (num >= 1000000) {
-    return (num / 1000000).toFixed(1) + 'M'
-  }
-  if (num >= 1000) {
-    return (num / 1000).toFixed(1) + 'K'
-  }
-  return num.toString()
-}
-
-function getCompetitionBadge(merchantCount: number) {
+function getCompetitionBadge(merchantCount: number, t: (key: string) => string) {
   if (merchantCount <= 5) {
-    return <Badge className="bg-green-500/20 text-green-500 hover:bg-green-500/30">Низкая</Badge>
+    return <Badge className="bg-green-500/20 text-green-500 hover:bg-green-500/30">{t("niche.competitionLow")}</Badge>
   }
   if (merchantCount <= 15) {
-    return <Badge className="bg-yellow-500/20 text-yellow-500 hover:bg-yellow-500/30">Средняя</Badge>
+    return <Badge className="bg-yellow-500/20 text-yellow-500 hover:bg-yellow-500/30">{t("niche.competitionMedium")}</Badge>
   }
-  return <Badge className="bg-red-500/20 text-red-500 hover:bg-red-500/30">Высокая</Badge>
+  return <Badge className="bg-red-500/20 text-red-500 hover:bg-red-500/30">{t("niche.competitionHigh")}</Badge>
 }
 
 export default function NicheSearchPage() {
-  const { locale } = useStore()
+  const t = useT()
   const [searchParams, setSearchParams] = useState<NicheSearchParams>({
     page: 1,
     limit: 20,
@@ -124,18 +116,17 @@ export default function NicheSearchPage() {
   }
 
   return (
+    <SubscriptionGate>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold flex items-center gap-2">
             <Sparkles className="h-6 w-6 text-primary" />
-            {locale === 'ru' ? 'Поиск ниш' : 'Niche Search'}
+            {t("niche.title")}
           </h1>
           <p className="text-muted-foreground mt-1">
-            {locale === 'ru'
-              ? 'Найдите прибыльные товары на Kaspi.kz'
-              : 'Find profitable products on Kaspi.kz'}
+            {t("niche.subtitle")}
           </p>
         </div>
 
@@ -147,7 +138,7 @@ export default function NicheSearchPage() {
             className="gap-2"
           >
             <Filter className="h-4 w-4" />
-            {locale === 'ru' ? 'Фильтры' : 'Filters'}
+            {t("common.filters")}
           </Button>
           <Button
             variant="outline"
@@ -157,7 +148,7 @@ export default function NicheSearchPage() {
             disabled={isLoading}
           >
             <RefreshCw className={`h-4 w-4 ${isLoading ? 'animate-spin' : ''}`} />
-            {locale === 'ru' ? 'Обновить' : 'Refresh'}
+            {t("common.refresh")}
           </Button>
         </div>
       </div>
@@ -172,7 +163,7 @@ export default function NicheSearchPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">
-                  {locale === 'ru' ? 'Товаров' : 'Products'}
+                  {t("niche.products")}
                 </p>
                 <p className="text-xl font-semibold">156,250</p>
               </div>
@@ -188,7 +179,7 @@ export default function NicheSearchPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">
-                  {locale === 'ru' ? 'Средние продажи' : 'Avg Sales'}
+                  {t("niche.avgSales")}
                 </p>
                 <p className="text-xl font-semibold">127/мес</p>
               </div>
@@ -204,7 +195,7 @@ export default function NicheSearchPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">
-                  {locale === 'ru' ? 'Средняя выручка' : 'Avg Revenue'}
+                  {t("niche.avgRevenue")}
                 </p>
                 <p className="text-xl font-semibold">2.4M ₸</p>
               </div>
@@ -220,7 +211,7 @@ export default function NicheSearchPage() {
               </div>
               <div>
                 <p className="text-sm text-muted-foreground">
-                  {locale === 'ru' ? 'Категорий' : 'Categories'}
+                  {t("niche.categories")}
                 </p>
                 <p className="text-xl font-semibold">21</p>
               </div>
@@ -237,22 +228,22 @@ export default function NicheSearchPage() {
               {/* Category */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">
-                  {locale === 'ru' ? 'Категория' : 'Category'}
+                  {t("niche.category")}
                 </label>
                 <Select
                   value={searchParams.category_id || 'all'}
                   onValueChange={handleCategoryChange}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder={locale === 'ru' ? 'Все категории' : 'All categories'} />
+                    <SelectValue placeholder={t("niche.allCategories")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">
-                      {locale === 'ru' ? 'Все категории' : 'All categories'}
+                      {t("niche.allCategories")}
                     </SelectItem>
                     {categories.map(cat => (
                       <SelectItem key={cat.id} value={cat.id}>
-                        {cat.name} ({formatNumber(cat.products_count)})
+                        {cat.name}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -262,20 +253,20 @@ export default function NicheSearchPage() {
               {/* Competition */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">
-                  {locale === 'ru' ? 'Конкуренция' : 'Competition'}
+                  {t("niche.competition")}
                 </label>
                 <Select
                   value={searchParams.competition || 'all'}
                   onValueChange={handleCompetitionChange}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder={locale === 'ru' ? 'Любая' : 'Any'} />
+                    <SelectValue placeholder={t("niche.any")} />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="all">{locale === 'ru' ? 'Любая' : 'Any'}</SelectItem>
-                    <SelectItem value="low">{locale === 'ru' ? 'Низкая (до 5)' : 'Low (up to 5)'}</SelectItem>
-                    <SelectItem value="medium">{locale === 'ru' ? 'Средняя (5-15)' : 'Medium (5-15)'}</SelectItem>
-                    <SelectItem value="high">{locale === 'ru' ? 'Высокая (15+)' : 'High (15+)'}</SelectItem>
+                    <SelectItem value="all">{t("niche.any")}</SelectItem>
+                    <SelectItem value="low">{t("niche.low")}</SelectItem>
+                    <SelectItem value="medium">{t("niche.medium")}</SelectItem>
+                    <SelectItem value="high">{t("niche.high")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -283,7 +274,7 @@ export default function NicheSearchPage() {
               {/* Min Price */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">
-                  {locale === 'ru' ? 'Цена от' : 'Price from'}
+                  {t("niche.priceFrom")}
                 </label>
                 <Input
                   type="number"
@@ -296,7 +287,7 @@ export default function NicheSearchPage() {
               {/* Max Price */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">
-                  {locale === 'ru' ? 'Цена до' : 'Price to'}
+                  {t("niche.priceTo")}
                 </label>
                 <Input
                   type="number"
@@ -309,7 +300,7 @@ export default function NicheSearchPage() {
               {/* Sort */}
               <div className="space-y-2">
                 <label className="text-sm font-medium">
-                  {locale === 'ru' ? 'Сортировка' : 'Sort by'}
+                  {t("niche.sortBy")}
                 </label>
                 <Select
                   value={searchParams.sort_by || 'revenue'}
@@ -319,9 +310,9 @@ export default function NicheSearchPage() {
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="revenue">{locale === 'ru' ? 'По выручке' : 'By revenue'}</SelectItem>
-                    <SelectItem value="sales">{locale === 'ru' ? 'По продажам' : 'By sales'}</SelectItem>
-                    <SelectItem value="reviews">{locale === 'ru' ? 'По отзывам' : 'By reviews'}</SelectItem>
+                    <SelectItem value="revenue">{t("niche.byRevenue")}</SelectItem>
+                    <SelectItem value="sales">{t("niche.bySales")}</SelectItem>
+                    <SelectItem value="reviews">{t("niche.byReviews")}</SelectItem>
                   </SelectContent>
                 </Select>
               </div>
@@ -334,9 +325,9 @@ export default function NicheSearchPage() {
       <Card className="glass-card">
         <CardHeader className="pb-3">
           <CardTitle className="text-lg flex items-center justify-between">
-            <span>{locale === 'ru' ? 'Товары' : 'Products'}</span>
+            <span>{t("niche.productsTable")}</span>
             <span className="text-sm font-normal text-muted-foreground">
-              {locale === 'ru' ? `Найдено: ${totalProducts}` : `Found: ${totalProducts}`}
+              {`${t("niche.found")} ${totalProducts}`}
             </span>
           </CardTitle>
         </CardHeader>
@@ -357,99 +348,163 @@ export default function NicheSearchPage() {
           ) : hasError ? (
             <div className="p-8 text-center">
               <p className="text-muted-foreground mb-4">
-                {locale === 'ru' ? 'Ошибка загрузки данных' : 'Error loading data'}
+                {t("niche.errorLoading")}
               </p>
               <Button onClick={() => refetch()} variant="outline" size="sm">
                 <RefreshCw className="h-4 w-4 mr-2" />
-                {locale === 'ru' ? 'Повторить' : 'Retry'}
+                {t("niche.retry")}
               </Button>
             </div>
           ) : (
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow className="hover:bg-transparent">
-                    <TableHead className="w-[300px]">{locale === 'ru' ? 'Товар' : 'Product'}</TableHead>
-                    <TableHead>{locale === 'ru' ? 'Цена' : 'Price'}</TableHead>
-                    <TableHead>{locale === 'ru' ? 'Продажи/мес' : 'Sales/mo'}</TableHead>
-                    <TableHead>{locale === 'ru' ? 'Выручка/мес' : 'Revenue/mo'}</TableHead>
-                    <TableHead>{locale === 'ru' ? 'Отзывы' : 'Reviews'}</TableHead>
-                    <TableHead>{locale === 'ru' ? 'Конкуренция' : 'Competition'}</TableHead>
-                    <TableHead className="w-[100px]"></TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {products.map((product) => (
-                    <TableRow
-                      key={product.id}
-                      className="cursor-pointer hover:bg-muted/50"
-                      onClick={() => setSelectedProduct(product)}
-                    >
-                      <TableCell>
-                        <div className="flex items-center gap-3">
-                          <div className="h-12 w-12 rounded-lg bg-muted flex items-center justify-center overflow-hidden">
-                            {product.image_url ? (
-                              <img
-                                src={product.image_url}
-                                alt={product.name}
-                                className="h-full w-full object-cover"
-                              />
-                            ) : (
-                              <Package className="h-6 w-6 text-muted-foreground" />
-                            )}
-                          </div>
-                          <div className="min-w-0">
-                            <p className="font-medium truncate max-w-[200px]">{product.name}</p>
-                            <p className="text-sm text-muted-foreground">{product.category_name}</p>
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell className="font-medium">
-                        {formatPrice(product.price)}
-                      </TableCell>
-                      <TableCell>
+            <>
+              {/* Mobile view - Cards */}
+              <div className="lg:hidden space-y-3">
+                {products.map((product) => (
+                  <div
+                    key={product.id}
+                    className="p-4 rounded-lg border cursor-pointer hover:bg-muted/50 transition-colors"
+                    onClick={() => setSelectedProduct(product)}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div className="h-12 w-12 rounded-lg bg-muted flex items-center justify-center overflow-hidden shrink-0 relative">
+                        {product.image_url ? (
+                          <Image
+                            src={product.image_url}
+                            alt={product.name}
+                            fill
+                            className="object-cover"
+                            unoptimized
+                          />
+                        ) : (
+                          <Package className="h-6 w-6 text-muted-foreground" />
+                        )}
+                      </div>
+                      <div className="min-w-0 flex-1">
+                        <p className="font-medium truncate">{product.name}</p>
+                        <p className="text-sm text-muted-foreground">{product.category_name}</p>
+                      </div>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 gap-3">
+                      <div>
+                        <p className="text-xs text-muted-foreground">{t("niche.price")}</p>
+                        <p className="font-semibold">{formatPrice(product.price)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">{t("niche.salesMo")}</p>
+                        <p className="font-semibold">{product.estimated_sales}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">{t("niche.revenueMo")}</p>
+                        <p className="font-semibold text-green-500">{formatPrice(product.estimated_revenue)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">{t("niche.reviews")}</p>
                         <div className="flex items-center gap-1">
-                          <TrendingUp className="h-4 w-4 text-green-500" />
-                          <span className="font-medium">{product.estimated_sales}</span>
+                          <Star className="h-3 w-3 text-yellow-500 fill-yellow-500" />
+                          <span className="font-medium">{product.rating}</span>
+                          <span className="text-xs text-muted-foreground">({product.review_count})</span>
                         </div>
-                      </TableCell>
-                      <TableCell>
-                        <span className="font-medium text-green-500">
-                          {formatPrice(product.estimated_revenue)}
-                        </span>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-1">
-                          <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
-                          <span>{product.rating}</span>
-                          <span className="text-muted-foreground">({product.review_count})</span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <div className="flex items-center gap-2">
-                          {getCompetitionBadge(product.merchant_count)}
-                          <span className="text-sm text-muted-foreground">
-                            {product.merchant_count}
-                          </span>
-                        </div>
-                      </TableCell>
-                      <TableCell>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            window.open(product.kaspi_url, '_blank')
-                          }}
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </Button>
-                      </TableCell>
+                      </div>
+                    </div>
+                    <div className="mt-3 flex items-center justify-between">
+                      {getCompetitionBadge(product.merchant_count, t)}
+                      <span className="text-sm text-muted-foreground">
+                        {product.merchant_count} {t("niche.sellers")}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              {/* Desktop view - Table */}
+              <div className="hidden lg:block overflow-x-auto">
+                <Table>
+                  <TableHeader>
+                    <TableRow className="hover:bg-transparent">
+                      <TableHead className="w-[300px]">{t("niche.product")}</TableHead>
+                      <TableHead>{t("niche.price")}</TableHead>
+                      <TableHead>{t("niche.salesMo")}</TableHead>
+                      <TableHead>{t("niche.revenueMo")}</TableHead>
+                      <TableHead>{t("niche.reviews")}</TableHead>
+                      <TableHead>{t("niche.competition")}</TableHead>
+                      <TableHead className="w-[100px]"></TableHead>
                     </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </div>
+                  </TableHeader>
+                  <TableBody>
+                    {products.map((product) => (
+                      <TableRow
+                        key={product.id}
+                        className="cursor-pointer hover:bg-muted/50"
+                        onClick={() => setSelectedProduct(product)}
+                      >
+                        <TableCell>
+                          <div className="flex items-center gap-3">
+                            <div className="h-12 w-12 rounded-lg bg-muted flex items-center justify-center overflow-hidden relative">
+                              {product.image_url ? (
+                                <Image
+                                  src={product.image_url}
+                                  alt={product.name}
+                                  fill
+                                  className="object-cover"
+                                  unoptimized
+                                />
+                              ) : (
+                                <Package className="h-6 w-6 text-muted-foreground" />
+                              )}
+                            </div>
+                            <div className="min-w-0">
+                              <p className="font-medium truncate max-w-[200px]">{product.name}</p>
+                              <p className="text-sm text-muted-foreground">{product.category_name}</p>
+                            </div>
+                          </div>
+                        </TableCell>
+                        <TableCell className="font-medium">
+                          {formatPrice(product.price)}
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <TrendingUp className="h-4 w-4 text-green-500" />
+                            <span className="font-medium">{product.estimated_sales}</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <span className="font-medium text-green-500">
+                            {formatPrice(product.estimated_revenue)}
+                          </span>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-1">
+                            <Star className="h-4 w-4 text-yellow-500 fill-yellow-500" />
+                            <span>{product.rating}</span>
+                            <span className="text-muted-foreground">({product.review_count})</span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <div className="flex items-center gap-2">
+                            {getCompetitionBadge(product.merchant_count, t)}
+                            <span className="text-sm text-muted-foreground">
+                              {product.merchant_count}
+                            </span>
+                          </div>
+                        </TableCell>
+                        <TableCell>
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              window.open(product.kaspi_url, '_blank')
+                            }}
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            </>
           )}
         </CardContent>
       </Card>
@@ -457,9 +512,7 @@ export default function NicheSearchPage() {
       {/* Pagination */}
       <div className="flex items-center justify-between">
         <p className="text-sm text-muted-foreground">
-          {locale === 'ru'
-            ? `Страница ${searchParams.page} из ${Math.ceil(totalProducts / (searchParams.limit || 20))}`
-            : `Page ${searchParams.page} of ${Math.ceil(totalProducts / (searchParams.limit || 20))}`}
+          {`${t("niche.page")} ${searchParams.page} / ${Math.ceil(totalProducts / (searchParams.limit || 20))}`}
         </p>
         <div className="flex gap-2">
           <Button
@@ -487,11 +540,15 @@ export default function NicheSearchPage() {
           <DialogHeader>
             <DialogTitle className="flex items-start gap-4">
               {selectedProduct?.image_url && (
-                <img
-                  src={selectedProduct.image_url}
-                  alt={selectedProduct.name}
-                  className="h-20 w-20 rounded-lg object-cover"
-                />
+                <div className="h-20 w-20 rounded-lg overflow-hidden relative shrink-0">
+                  <Image
+                    src={selectedProduct.image_url}
+                    alt={selectedProduct.name}
+                    fill
+                    className="object-cover"
+                    unoptimized
+                  />
+                </div>
               )}
               <div className="min-w-0 flex-1">
                 <p className="text-lg font-semibold">{selectedProduct?.name}</p>
@@ -508,7 +565,7 @@ export default function NicheSearchPage() {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 text-muted-foreground mb-1">
                       <DollarSign className="h-4 w-4" />
-                      <span className="text-sm">{locale === 'ru' ? 'Цена' : 'Price'}</span>
+                      <span className="text-sm">{t("niche.price")}</span>
                     </div>
                     <p className="text-xl font-semibold">{formatPrice(selectedProduct.price)}</p>
                   </CardContent>
@@ -518,7 +575,7 @@ export default function NicheSearchPage() {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 text-muted-foreground mb-1">
                       <TrendingUp className="h-4 w-4" />
-                      <span className="text-sm">{locale === 'ru' ? 'Продажи/мес' : 'Sales/mo'}</span>
+                      <span className="text-sm">{t("niche.salesMo")}</span>
                     </div>
                     <p className="text-xl font-semibold">{selectedProduct.estimated_sales}</p>
                   </CardContent>
@@ -528,7 +585,7 @@ export default function NicheSearchPage() {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 text-muted-foreground mb-1">
                       <BarChart3 className="h-4 w-4" />
-                      <span className="text-sm">{locale === 'ru' ? 'Выручка/мес' : 'Revenue/mo'}</span>
+                      <span className="text-sm">{t("niche.revenueMo")}</span>
                     </div>
                     <p className="text-xl font-semibold text-green-500">
                       {formatPrice(selectedProduct.estimated_revenue)}
@@ -540,11 +597,11 @@ export default function NicheSearchPage() {
                   <CardContent className="p-4">
                     <div className="flex items-center gap-2 text-muted-foreground mb-1">
                       <Users className="h-4 w-4" />
-                      <span className="text-sm">{locale === 'ru' ? 'Продавцов' : 'Sellers'}</span>
+                      <span className="text-sm">{t("niche.sellers")}</span>
                     </div>
                     <div className="flex items-center gap-2">
                       <p className="text-xl font-semibold">{selectedProduct.merchant_count}</p>
-                      {getCompetitionBadge(selectedProduct.merchant_count)}
+                      {getCompetitionBadge(selectedProduct.merchant_count, t)}
                     </div>
                   </CardContent>
                 </Card>
@@ -557,7 +614,7 @@ export default function NicheSearchPage() {
                   <span className="text-lg font-semibold">{selectedProduct.rating}</span>
                 </div>
                 <div className="text-muted-foreground">
-                  {selectedProduct.review_count} {locale === 'ru' ? 'отзывов' : 'reviews'}
+                  {selectedProduct.review_count} {t("niche.reviews")}
                 </div>
               </div>
 
@@ -568,7 +625,7 @@ export default function NicheSearchPage() {
                   onClick={() => window.open(selectedProduct.kaspi_url, '_blank')}
                 >
                   <ExternalLink className="h-4 w-4 mr-2" />
-                  {locale === 'ru' ? 'Открыть на Kaspi' : 'Open on Kaspi'}
+                  {t("niche.openOnKaspi")}
                 </Button>
               </div>
             </div>
@@ -576,5 +633,6 @@ export default function NicheSearchPage() {
         </DialogContent>
       </Dialog>
     </div>
+    </SubscriptionGate>
   )
 }

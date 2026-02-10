@@ -2,6 +2,8 @@
 
 import { useState } from "react"
 import { useStore } from "@/store/use-store"
+import { useT } from "@/lib/i18n"
+import { SubscriptionGate } from "@/components/shared/subscription-gate"
 import { useSalesAnalytics, useTopProducts, useSyncOrders } from "@/hooks/api/use-analytics"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
@@ -96,22 +98,21 @@ function TopProductsLoading() {
   )
 }
 
-function NoStoreSelected({ locale }: { locale: string }) {
+function NoStoreSelected() {
+  const t = useT()
   return (
     <Card className="glass-card">
       <CardContent className="p-8 text-center">
         <Store className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
         <h3 className="text-lg font-semibold mb-2">
-          {locale === "ru" ? "Выберите магазин" : "Select a store"}
+          {t("sales.selectStore")}
         </h3>
         <p className="text-muted-foreground mb-4">
-          {locale === "ru"
-            ? "Для просмотра аналитики выберите магазин или добавьте новый"
-            : "Select a store or add a new one to view analytics"}
+          {t("sales.selectStoreDesc")}
         </p>
         <Link href="/dashboard/integrations">
           <Button>
-            {locale === "ru" ? "Добавить магазин" : "Add store"}
+            {t("sales.addStore")}
           </Button>
         </Link>
       </CardContent>
@@ -119,12 +120,15 @@ function NoStoreSelected({ locale }: { locale: string }) {
   )
 }
 
-function SimpleBarChart({ data, locale }: { data: { date: string; revenue: number; orders: number }[]; locale: string }) {
+function SimpleBarChart({ data }: { data: { date: string; revenue: number; orders: number }[] }) {
+  const t = useT()
+  const { locale } = useStore()
+
   if (!data || data.length === 0) {
     return (
       <div className="h-[300px] flex items-center justify-center bg-muted/30 rounded-xl">
         <p className="text-muted-foreground">
-          {locale === "ru" ? "Нет данных" : "No data"}
+          {t("sales.noData")}
         </p>
       </div>
     )
@@ -137,7 +141,7 @@ function SimpleBarChart({ data, locale }: { data: { date: string; revenue: numbe
       {data.map((day, index) => {
         const height = maxRevenue > 0 ? (day.revenue / maxRevenue) * 100 : 0
         const date = new Date(day.date)
-        const dayLabel = date.toLocaleDateString(locale === "ru" ? "ru-RU" : "en-US", {
+        const dayLabel = date.toLocaleDateString(locale === "ru" ? "ru-RU" : "kk-KZ", {
           day: "numeric",
           month: "short",
         })
@@ -151,7 +155,7 @@ function SimpleBarChart({ data, locale }: { data: { date: string; revenue: numbe
               <div
                 className="w-full max-w-[40px] bg-primary/20 hover:bg-primary/40 rounded-t transition-all cursor-pointer"
                 style={{ height: `${Math.max(height, 2)}%`, minHeight: "8px" }}
-                title={`${dayLabel}: ${formatPrice(day.revenue)} (${day.orders} ${locale === "ru" ? "заказов" : "orders"})`}
+                title={`${dayLabel}: ${formatPrice(day.revenue)} (${day.orders} ${t("sales.orders")})`}
               />
             </div>
             {data.length <= 14 && (
@@ -167,7 +171,8 @@ function SimpleBarChart({ data, locale }: { data: { date: string; revenue: numbe
 }
 
 export default function SalesPage() {
-  const { locale, selectedStore } = useStore()
+  const { selectedStore } = useStore()
+  const t = useT()
   const [period, setPeriod] = useState<"7d" | "30d" | "90d">("7d")
 
   const {
@@ -191,45 +196,37 @@ export default function SalesPage() {
         storeId: selectedStore.id,
         daysBack: period === "7d" ? 7 : period === "30d" ? 30 : 90,
       })
-      toast.success(
-        locale === "ru"
-          ? "Синхронизация заказов запущена. Данные обновятся через несколько секунд."
-          : "Orders sync started. Data will update in a few seconds."
-      )
+      toast.success(t("sales.syncOrders"))
     } catch (error) {
-      toast.error(locale === "ru" ? "Ошибка синхронизации" : "Sync failed")
+      toast.error(t("sales.loadingError"))
     }
   }
 
   const stats = analytics
     ? [
         {
-          title: "Выручка",
-          titleEn: "Revenue",
+          titleKey: "sales.revenue",
           value: formatPrice(analytics.total_revenue),
           change: "",
           trend: "up" as const,
           icon: DollarSign,
         },
         {
-          title: "Заказы",
-          titleEn: "Orders",
+          titleKey: "sales.ordersCount",
           value: formatNumber(analytics.total_orders),
           change: "",
           trend: "up" as const,
           icon: ShoppingCart,
         },
         {
-          title: "Товаров продано",
-          titleEn: "Items sold",
+          titleKey: "sales.itemsSold",
           value: formatNumber(analytics.total_items_sold),
           change: "",
           trend: "up" as const,
           icon: Package,
         },
         {
-          title: "Средний чек",
-          titleEn: "Avg. order",
+          titleKey: "sales.avgOrder",
           value: formatPrice(analytics.avg_order_value),
           change: "",
           trend: "up" as const,
@@ -239,17 +236,16 @@ export default function SalesPage() {
     : []
 
   return (
+    <SubscriptionGate>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">
-            {locale === "ru" ? "Продажи и аналитика" : "Sales & Analytics"}
+            {t("sales.title")}
           </h1>
           <p className="text-muted-foreground">
-            {locale === "ru"
-              ? "Детальная статистика продаж"
-              : "Detailed sales statistics"}
+            {t("sales.subtitle")}
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -257,19 +253,19 @@ export default function SalesPage() {
             value={period}
             onValueChange={(v) => setPeriod(v as "7d" | "30d" | "90d")}
           >
-            <SelectTrigger className="w-[140px]">
+            <SelectTrigger className="w-full sm:w-[140px]">
               <Calendar className="h-4 w-4 mr-2" />
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
               <SelectItem value="7d">
-                {locale === "ru" ? "7 дней" : "7 days"}
+                {t("sales.7days")}
               </SelectItem>
               <SelectItem value="30d">
-                {locale === "ru" ? "30 дней" : "30 days"}
+                {t("sales.30days")}
               </SelectItem>
               <SelectItem value="90d">
-                {locale === "ru" ? "90 дней" : "90 days"}
+                {t("sales.90days")}
               </SelectItem>
             </SelectContent>
           </Select>
@@ -283,17 +279,17 @@ export default function SalesPage() {
             ) : (
               <RefreshCw className="h-4 w-4 mr-2" />
             )}
-            {locale === "ru" ? "Обновить заказы" : "Sync orders"}
+            {t("sales.syncOrders")}
           </Button>
           <Button variant="outline" disabled={!selectedStore}>
             <Download className="h-4 w-4 mr-2" />
-            {locale === "ru" ? "Экспорт" : "Export"}
+            {t("sales.export")}
           </Button>
         </div>
       </div>
 
       {/* No store selected */}
-      {!selectedStore && <NoStoreSelected locale={locale} />}
+      {!selectedStore && <NoStoreSelected />}
 
       {/* Content when store is selected */}
       {selectedStore && (
@@ -307,12 +303,10 @@ export default function SalesPage() {
                 <AlertCircle className="h-8 w-8 text-destructive" />
                 <div>
                   <h3 className="font-semibold">
-                    {locale === "ru" ? "Ошибка загрузки" : "Loading error"}
+                    {t("sales.loadingError")}
                   </h3>
                   <p className="text-sm text-muted-foreground">
-                    {locale === "ru"
-                      ? "Не удалось загрузить аналитику"
-                      : "Failed to load analytics"}
+                    {t("sales.loadingErrorDesc")}
                   </p>
                 </div>
               </CardContent>
@@ -322,7 +316,7 @@ export default function SalesPage() {
           {!analyticsLoading && !analyticsError && analytics && (
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
               {stats.map((stat) => (
-                <Card key={stat.title} className="glass-card glass-hover">
+                <Card key={stat.titleKey} className="glass-card glass-hover">
                   <CardContent className="p-6">
                     <div className="flex items-center justify-between">
                       <div className="p-2 rounded-xl bg-muted">
@@ -346,7 +340,7 @@ export default function SalesPage() {
                     <div className="mt-4">
                       <p className="text-2xl font-semibold">{stat.value}</p>
                       <p className="text-sm text-muted-foreground">
-                        {locale === "ru" ? stat.title : stat.titleEn}
+                        {t(stat.titleKey)}
                       </p>
                     </div>
                   </CardContent>
@@ -362,11 +356,11 @@ export default function SalesPage() {
             <Card className="glass-card">
               <CardHeader>
                 <CardTitle>
-                  {locale === "ru" ? "График продаж" : "Sales chart"}
+                  {t("sales.chart")}
                 </CardTitle>
               </CardHeader>
               <CardContent>
-                <SimpleBarChart data={analytics.daily_stats} locale={locale} />
+                <SimpleBarChart data={analytics.daily_stats} />
               </CardContent>
             </Card>
           )}
@@ -375,7 +369,7 @@ export default function SalesPage() {
           <Card className="glass-card">
             <CardHeader>
               <CardTitle>
-                {locale === "ru" ? "Топ товаров" : "Top products"}
+                {t("sales.topProducts")}
               </CardTitle>
             </CardHeader>
             <CardContent>
@@ -385,10 +379,10 @@ export default function SalesPage() {
                 <Tabs defaultValue="sales">
                   <TabsList className="mb-4">
                     <TabsTrigger value="sales">
-                      {locale === "ru" ? "По продажам" : "By sales"}
+                      {t("sales.bySales")}
                     </TabsTrigger>
                     <TabsTrigger value="revenue">
-                      {locale === "ru" ? "По выручке" : "By revenue"}
+                      {t("sales.byRevenue")}
                     </TabsTrigger>
                   </TabsList>
                   <TabsContent value="sales" className="space-y-4">
@@ -411,7 +405,7 @@ export default function SalesPage() {
                             </div>
                           </div>
                           <Badge variant="secondary" className="text-base">
-                            {product.sales_count} {locale === "ru" ? "шт" : "pcs"}
+                            {product.sales_count} {t("sales.pcs")}
                           </Badge>
                         </div>
                       ))}
@@ -431,7 +425,7 @@ export default function SalesPage() {
                             <div>
                               <p className="font-medium">{product.name}</p>
                               <p className="text-sm text-muted-foreground">
-                                {product.sales_count} {locale === "ru" ? "шт" : "pcs"}
+                                {product.sales_count} {t("sales.pcs")}
                               </p>
                             </div>
                           </div>
@@ -446,7 +440,7 @@ export default function SalesPage() {
 
               {!topProductsLoading && (!topProducts || topProducts.length === 0) && (
                 <div className="py-8 text-center text-muted-foreground">
-                  {locale === "ru" ? "Нет данных о продажах" : "No sales data"}
+                  {t("sales.noSalesData")}
                 </div>
               )}
             </CardContent>
@@ -454,5 +448,6 @@ export default function SalesPage() {
         </>
       )}
     </div>
+    </SubscriptionGate>
   )
 }

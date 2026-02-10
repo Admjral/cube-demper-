@@ -1,6 +1,7 @@
 "use client"
 
 import { useState, useEffect, useRef } from "react"
+import { usePathname } from "next/navigation"
 import { formatDistanceToNow } from "date-fns"
 import { ru } from "date-fns/locale"
 import { MessageCircle, X, Send, Loader2, User, Headphones } from "lucide-react"
@@ -18,6 +19,7 @@ import {
   SupportChat,
 } from "@/lib/support"
 import { authClient } from "@/lib/auth"
+import { useT } from "@/lib/i18n"
 
 export function SupportChatWidget() {
   const [isOpen, setIsOpen] = useState(false)
@@ -30,6 +32,9 @@ export function SupportChatWidget() {
 
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const wsRef = useRef<WebSocket | null>(null)
+  const t = useT()
+
+  const pathname = usePathname()
 
   // Don't show widget if not authenticated
   const isAuthenticated = authClient.isAuthenticated()
@@ -118,6 +123,9 @@ export function SupportChatWidget() {
 
   if (!isAuthenticated) return null
 
+  // Hide floating widget on dedicated support page
+  if (pathname === '/dashboard/support') return null
+
   return (
     <>
       {/* Floating button */}
@@ -152,8 +160,8 @@ export function SupportChatWidget() {
               <Headphones className="h-5 w-5" />
             </div>
             <div>
-              <h3 className="font-semibold">Техподдержка</h3>
-              <p className="text-xs opacity-80">Обычно отвечаем в течение часа</p>
+              <h3 className="font-semibold">{t("support.team")}</h3>
+              <p className="text-xs opacity-80">{t("support.responseTime")}</p>
             </div>
           </div>
 
@@ -166,7 +174,7 @@ export function SupportChatWidget() {
             ) : messages.length === 0 ? (
               <div className="text-center text-muted-foreground py-8">
                 <MessageCircle className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                <p>Напишите нам, если у вас есть вопросы</p>
+                <p>{t("support.writeToUs")}</p>
               </div>
             ) : (
               <div className="space-y-4">
@@ -228,7 +236,7 @@ export function SupportChatWidget() {
               <Input
                 value={newMessage}
                 onChange={(e) => setNewMessage(e.target.value)}
-                placeholder="Введите сообщение..."
+                placeholder={t("support.enterMessage")}
                 disabled={sending}
                 className="flex-1"
               />

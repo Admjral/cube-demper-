@@ -4,7 +4,7 @@
 
 import { authClient } from './auth'
 
-const API_BASE = process.env.NEXT_PUBLIC_API_URL || 'https://cube-demper-backend-production.up.railway.app'
+const API_BASE = process.env.NEXT_PUBLIC_API_URL || ''
 
 // Types
 export interface CategoryCommission {
@@ -48,7 +48,10 @@ export interface CalculationResult {
   purchase_price: number
   category: string
   commission_rate: number
+  commission_effective_rate: number
   commission_amount: number
+  kaspi_pay_rate: number
+  kaspi_pay_amount: number
   tax_regime: string
   tax_rate: number
   tax_amount: number
@@ -65,6 +68,7 @@ export interface ProductParseResult {
   price?: number
   category?: string
   subcategory?: string
+  weight_kg?: number
   image_url?: string
   kaspi_url: string
   success: boolean

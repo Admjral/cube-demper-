@@ -1,6 +1,7 @@
 "use client"
 
 import { useStore } from "@/store/use-store"
+import { useT } from "@/lib/i18n"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Label } from "@/components/ui/label"
@@ -29,18 +30,17 @@ import { useTheme } from "next-themes"
 export default function SettingsPage() {
   const { locale, setLocale, stores, selectedStore, setSelectedStore } = useStore()
   const { theme, setTheme } = useTheme()
+  const t = useT()
 
   return (
     <div className="space-y-6 max-w-2xl">
       {/* Header */}
       <div>
         <h1 className="text-2xl font-semibold">
-          {locale === "ru" ? "Настройки" : "Settings"}
+          {t("settings.title")}
         </h1>
         <p className="text-muted-foreground">
-          {locale === "ru"
-            ? "Настройки приложения и уведомлений"
-            : "App and notification settings"}
+          {t("settings.subtitle")}
         </p>
       </div>
 
@@ -49,7 +49,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
             <Moon className="h-5 w-5" />
-            {locale === "ru" ? "Внешний вид" : "Appearance"}
+            {t("settings.appearance")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -63,12 +63,10 @@ export default function SettingsPage() {
               )}
               <div>
                 <p className="font-medium">
-                  {locale === "ru" ? "Тема" : "Theme"}
+                  {t("settings.theme")}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {locale === "ru"
-                    ? "Выберите светлую или тёмную тему"
-                    : "Choose light or dark theme"}
+                  {t("settings.themeDesc")}
                 </p>
               </div>
             </div>
@@ -78,13 +76,13 @@ export default function SettingsPage() {
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="light">
-                  {locale === "ru" ? "Светлая" : "Light"}
+                  {t("settings.light")}
                 </SelectItem>
                 <SelectItem value="dark">
-                  {locale === "ru" ? "Тёмная" : "Dark"}
+                  {t("settings.dark")}
                 </SelectItem>
                 <SelectItem value="system">
-                  {locale === "ru" ? "Системная" : "System"}
+                  {t("settings.system")}
                 </SelectItem>
               </SelectContent>
             </Select>
@@ -98,12 +96,10 @@ export default function SettingsPage() {
               <Languages className="h-5 w-5 text-muted-foreground" />
               <div>
                 <p className="font-medium">
-                  {locale === "ru" ? "Язык" : "Language"}
+                  {t("settings.language")}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {locale === "ru"
-                    ? "Язык интерфейса"
-                    : "Interface language"}
+                  {t("settings.languageDesc")}
                 </p>
               </div>
             </div>
@@ -125,17 +121,17 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
             <Store className="h-5 w-5" />
-            {locale === "ru" ? "Магазин" : "Store"}
+            {t("settings.store")}
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="flex items-center justify-between">
             <div>
               <p className="font-medium">
-                {locale === "ru" ? "Текущий магазин" : "Current store"}
+                {t("settings.currentStore")}
               </p>
               <p className="text-sm text-muted-foreground">
-                {selectedStore?.name || (locale === "ru" ? "Не выбран" : "Not selected")}
+                {selectedStore?.name || t("settings.notSelected")}
               </p>
             </div>
             <Select
@@ -165,7 +161,7 @@ export default function SettingsPage() {
         <CardHeader>
           <CardTitle className="text-lg flex items-center gap-2">
             <Bell className="h-5 w-5" />
-            {locale === "ru" ? "Уведомления" : "Notifications"}
+            {t("settings.notifications")}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -175,12 +171,10 @@ export default function SettingsPage() {
               <Smartphone className="h-5 w-5 text-muted-foreground" />
               <div>
                 <p className="font-medium">
-                  {locale === "ru" ? "Push-уведомления" : "Push notifications"}
+                  {t("settings.pushNotifications")}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {locale === "ru"
-                    ? "Уведомления в браузере"
-                    : "Browser notifications"}
+                  {t("settings.browserNotifications")}
                 </p>
               </div>
             </div>
@@ -195,12 +189,10 @@ export default function SettingsPage() {
               <Mail className="h-5 w-5 text-muted-foreground" />
               <div>
                 <p className="font-medium">
-                  {locale === "ru" ? "Email-уведомления" : "Email notifications"}
+                  {t("settings.emailNotifications")}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {locale === "ru"
-                    ? "Важные уведомления на почту"
-                    : "Important notifications via email"}
+                  {t("settings.emailNotificationsDesc")}
                 </p>
               </div>
             </div>
@@ -215,12 +207,10 @@ export default function SettingsPage() {
               <MessageSquare className="h-5 w-5 text-muted-foreground" />
               <div>
                 <p className="font-medium">
-                  {locale === "ru" ? "Новые заказы" : "New orders"}
+                  {t("settings.newOrders")}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {locale === "ru"
-                    ? "Уведомления о новых заказах"
-                    : "Notifications about new orders"}
+                  {t("settings.newOrdersDesc")}
                 </p>
               </div>
             </div>
@@ -235,12 +225,10 @@ export default function SettingsPage() {
               <Settings className="h-5 w-5 text-muted-foreground" />
               <div>
                 <p className="font-medium">
-                  {locale === "ru" ? "Изменения цен" : "Price changes"}
+                  {t("settings.priceChanges")}
                 </p>
                 <p className="text-sm text-muted-foreground">
-                  {locale === "ru"
-                    ? "Уведомления от ценового бота"
-                    : "Price bot notifications"}
+                  {t("settings.priceChangesDesc")}
                 </p>
               </div>
             </div>
@@ -251,7 +239,7 @@ export default function SettingsPage() {
 
       {/* Save button */}
       <Button className="w-full sm:w-auto">
-        {locale === "ru" ? "Сохранить настройки" : "Save settings"}
+        {t("settings.saveSettings")}
       </Button>
     </div>
   )

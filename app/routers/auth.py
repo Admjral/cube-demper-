@@ -28,6 +28,7 @@ from ..core.security import (
 from ..core.exceptions import AuthenticationError
 from ..dependencies import get_current_user
 from ..config import settings
+from ..services.notification_service import notify_referral_signup
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +130,32 @@ async def register(
             free_plan_id,
             settings.plan_free_products_limit
         )
+
+        # Process referral code
+        if user_data.ref_code:
+            try:
+                referrer = await conn.fetchrow(
+                    "SELECT id, email FROM users WHERE UPPER(referral_code) = $1",
+                    user_data.ref_code.strip().upper()
+                )
+                if referrer:
+                    await conn.execute(
+                        "UPDATE users SET referred_by = $1 WHERE id = $2",
+                        referrer['id'], user['id']
+                    )
+                    await conn.execute(
+                        "UPDATE users SET referral_clicks = COALESCE(referral_clicks, 0) + 1 WHERE id = $1",
+                        referrer['id']
+                    )
+                    logger.info(f"[REFERRAL] User {user['id']} registered with ref_code={user_data.ref_code}, referrer={referrer['id']}")
+                    try:
+                        await notify_referral_signup(pool, referrer['id'], user_data.email)
+                    except Exception as e:
+                        logger.error(f"[REFERRAL] Failed to send signup notification: {e}")
+                else:
+                    logger.warning(f"[REFERRAL] Invalid ref_code={user_data.ref_code} during registration")
+            except Exception as e:
+                logger.error(f"[REFERRAL] Error processing ref_code: {e}")
 
         # Send OTP
         await _send_otp(conn, user['id'], user_data.phone)

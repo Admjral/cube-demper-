@@ -1,7 +1,7 @@
 "use client"
 
 import { useState } from "react"
-import { useStore } from "@/store/use-store"
+import { useT } from "@/lib/i18n"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -36,7 +36,7 @@ import {
 } from "@/hooks/api/use-stores"
 
 export default function IntegrationsPage() {
-  const { locale } = useStore()
+  const t = useT()
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [kaspiEmail, setKaspiEmail] = useState("")
   const [kaspiPassword, setKaspiPassword] = useState("")
@@ -52,7 +52,7 @@ export default function IntegrationsPage() {
 
   const handleConnectKaspi = async () => {
     if (!kaspiEmail || !kaspiPassword) {
-      toast.error(locale === "ru" ? "Заполните все поля" : "Fill all fields")
+      toast.error(t("integrations.connectError"))
       return
     }
 
@@ -61,18 +61,13 @@ export default function IntegrationsPage() {
         email: kaspiEmail,
         password: kaspiPassword,
       })
-      toast.success(
-        locale === "ru"
-          ? "Магазин успешно подключён!"
-          : "Store connected successfully!"
-      )
+      toast.success(t("integrations.connectSuccess"))
       setShowAddDialog(false)
       setKaspiEmail("")
       setKaspiPassword("")
     } catch (error: any) {
       toast.error(
-        error?.message ||
-          (locale === "ru" ? "Ошибка подключения" : "Connection error")
+        error?.message || t("integrations.connectError")
       )
     }
   }
@@ -80,9 +75,7 @@ export default function IntegrationsPage() {
   const handleDeleteStore = async (storeId: string, storeName: string) => {
     if (
       !confirm(
-        locale === "ru"
-          ? `Удалить магазин "${storeName}"?`
-          : `Delete store "${storeName}"?`
+        `${t("integrations.deleteStore")} "${storeName}"?`
       )
     ) {
       return
@@ -90,9 +83,9 @@ export default function IntegrationsPage() {
 
     try {
       await deleteStore.mutateAsync(storeId)
-      toast.success(locale === "ru" ? "Магазин удалён" : "Store deleted")
+      toast.success(t("integrations.storeDeleted"))
     } catch {
-      toast.error(locale === "ru" ? "Ошибка удаления" : "Delete error")
+      toast.error(t("integrations.deleteError"))
     }
   }
 
@@ -100,19 +93,17 @@ export default function IntegrationsPage() {
     try {
       const result = await syncStore.mutateAsync(storeId)
       toast.success(
-        locale === "ru"
-          ? `Синхронизировано ${result.products_count} товаров`
-          : `Synced ${result.products_count} products`
+        `${t("integrations.synced")} ${result.products_count} ${t("common.products")}`
       )
     } catch {
-      toast.error(locale === "ru" ? "Ошибка синхронизации" : "Sync error")
+      toast.error(t("integrations.syncError"))
     }
   }
 
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return locale === "ru" ? "Никогда" : "Never"
+    if (!dateString) return t("integrations.never")
     const date = new Date(dateString)
-    return date.toLocaleDateString(locale === "ru" ? "ru-RU" : "en-US", {
+    return date.toLocaleDateString("ru-RU", {
       day: "numeric",
       month: "short",
       hour: "2-digit",
@@ -126,32 +117,26 @@ export default function IntegrationsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">
-            {locale === "ru" ? "Магазины Kaspi" : "Kaspi Stores"}
+            {t("integrations.title")}
           </h1>
           <p className="text-muted-foreground">
-            {locale === "ru"
-              ? "Подключите свои магазины для синхронизации"
-              : "Connect your stores for synchronization"}
+            {t("integrations.subtitle")}
           </p>
         </div>
         <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
           <DialogTrigger asChild>
             <Button>
               <Plus className="h-4 w-4 mr-2" />
-              {locale === "ru" ? "Добавить магазин" : "Add store"}
+              {t("integrations.addStore")}
             </Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>
-                {locale === "ru"
-                  ? "Подключить магазин Kaspi"
-                  : "Connect Kaspi Store"}
+                {t("integrations.connectStore")}
               </DialogTitle>
               <DialogDescription>
-                {locale === "ru"
-                  ? "Введите данные от личного кабинета продавца Kaspi"
-                  : "Enter your Kaspi seller account credentials"}
+                {t("integrations.connectDesc")}
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 pt-4">
@@ -168,7 +153,7 @@ export default function IntegrationsPage() {
               </div>
               <div className="space-y-2">
                 <Label htmlFor="kaspi-password">
-                  {locale === "ru" ? "Пароль" : "Password"}
+                  {t("integrations.password")}
                 </Label>
                 <Input
                   id="kaspi-password"
@@ -180,9 +165,7 @@ export default function IntegrationsPage() {
                 />
               </div>
               <p className="text-xs text-muted-foreground">
-                {locale === "ru"
-                  ? "Ваши данные надёжно защищены и используются только для синхронизации"
-                  : "Your credentials are securely protected and used only for synchronization"}
+                {t("integrations.securityNote")}
               </p>
               <Button
                 onClick={handleConnectKaspi}
@@ -192,12 +175,12 @@ export default function IntegrationsPage() {
                 {kaspiAuth.isPending ? (
                   <>
                     <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    {locale === "ru" ? "Подключение..." : "Connecting..."}
+                    {t("integrations.connecting")}
                   </>
                 ) : (
                   <>
                     <Store className="h-4 w-4 mr-2" />
-                    {locale === "ru" ? "Подключить" : "Connect"}
+                    {t("integrations.connect")}
                   </>
                 )}
               </Button>
@@ -212,7 +195,7 @@ export default function IntegrationsPage() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                {locale === "ru" ? "Всего магазинов" : "Total stores"}
+                {t("integrations.totalStores")}
               </p>
               <ShoppingBag className="h-4 w-4 text-muted-foreground" />
             </div>
@@ -223,7 +206,7 @@ export default function IntegrationsPage() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                {locale === "ru" ? "Активных" : "Active"}
+                {t("integrations.activeStores")}
               </p>
               <CheckCircle className="h-4 w-4 text-green-500" />
             </div>
@@ -234,7 +217,7 @@ export default function IntegrationsPage() {
           <CardContent className="p-4">
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                {locale === "ru" ? "Товаров" : "Products"}
+                {t("integrations.productsCount")}
               </p>
               <Package className="h-4 w-4 text-muted-foreground" />
             </div>
@@ -275,12 +258,8 @@ export default function IntegrationsPage() {
                           variant={store.is_active ? "default" : "secondary"}
                         >
                           {store.is_active
-                            ? locale === "ru"
-                              ? "Активен"
-                              : "Active"
-                            : locale === "ru"
-                            ? "Неактивен"
-                            : "Inactive"}
+                            ? t("common.active")
+                            : t("common.inactive")}
                         </Badge>
                       </div>
                       <p className="text-sm text-muted-foreground">
@@ -290,11 +269,11 @@ export default function IntegrationsPage() {
                         <span className="flex items-center gap-1">
                           <Package className="h-3 w-3" />
                           {store.products_count || 0}{" "}
-                          {locale === "ru" ? "товаров" : "products"}
+                          {t("common.products")}
                         </span>
                         <span className="flex items-center gap-1">
                           <Clock className="h-3 w-3" />
-                          {locale === "ru" ? "Синхр:" : "Sync:"}{" "}
+                          {t("integrations.syncLabel")}{" "}
                           {formatDate(store.last_sync)}
                         </span>
                       </div>
@@ -313,7 +292,7 @@ export default function IntegrationsPage() {
                         <RefreshCw className="h-4 w-4" />
                       )}
                       <span className="ml-2 hidden sm:inline">
-                        {locale === "ru" ? "Синхронизировать" : "Sync"}
+                        {t("integrations.sync")}
                       </span>
                     </Button>
                     <Button
@@ -338,16 +317,14 @@ export default function IntegrationsPage() {
                 <Store className="h-8 w-8 text-muted-foreground" />
               </div>
               <h3 className="font-semibold mb-2">
-                {locale === "ru" ? "Нет подключённых магазинов" : "No connected stores"}
+                {t("integrations.noStores")}
               </h3>
               <p className="text-sm text-muted-foreground mb-4">
-                {locale === "ru"
-                  ? "Подключите свой первый магазин Kaspi для начала работы"
-                  : "Connect your first Kaspi store to get started"}
+                {t("integrations.noStoresDesc")}
               </p>
               <Button onClick={() => setShowAddDialog(true)}>
                 <Plus className="h-4 w-4 mr-2" />
-                {locale === "ru" ? "Добавить магазин" : "Add store"}
+                {t("integrations.addStore")}
               </Button>
             </div>
           </CardContent>

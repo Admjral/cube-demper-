@@ -20,6 +20,7 @@ from ..dependencies import get_current_user
 from ..config import settings
 from ..services.proxy_allocator import proxy_allocator
 from ..services.proxy_provider import ensure_proxy_pool_sufficient
+from ..services.notification_service import notify_referral_paid
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -165,6 +166,41 @@ async def create_subscription(
             price_tiyns,
             subscription_request.plan
         )
+
+        # Auto-credit referral commission
+        if price_tiyns > 0:
+            try:
+                referrer = await conn.fetchrow(
+                    "SELECT u.id, u.email FROM users u WHERE u.id = (SELECT referred_by FROM users WHERE id = $1)",
+                    current_user['id']
+                )
+                if referrer:
+                    commission_pct_row = await conn.fetchval(
+                        "SELECT value FROM site_settings WHERE key = 'referral_commission_percent'"
+                    )
+                    commission_pct = int(commission_pct_row) if commission_pct_row else 20
+                    commission_amount = int(price_tiyns * commission_pct / 100)
+                    if commission_amount > 0:
+                        await conn.execute("""
+                            INSERT INTO referral_transactions
+                                (id, user_id, referred_user_id, type, amount, description, status, created_at)
+                            VALUES ($1, $2, $3, 'income', $4, $5, 'completed', NOW())
+                        """,
+                            uuid.uuid4(),
+                            referrer['id'],
+                            current_user['id'],
+                            commission_amount,
+                            f"Комиссия {commission_pct}% за подписку {subscription_request.plan}"
+                        )
+                        logger.info(
+                            f"[REFERRAL] Credited {commission_amount} tiyns to referrer {referrer['id']} "
+                            f"for user {current_user['id']} plan {subscription_request.plan}"
+                        )
+                        await notify_referral_paid(
+                            pool, referrer['id'], current_user.get('email', ''), commission_amount
+                        )
+            except Exception as e:
+                logger.error(f"[REFERRAL] Failed to credit commission: {e}")
 
     # ✅ Allocate 100 proxies to user after successful subscription
     user_id = uuid.UUID(current_user['id'])

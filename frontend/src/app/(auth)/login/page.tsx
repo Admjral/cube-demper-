@@ -7,11 +7,13 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { useAuth } from '@/hooks/use-auth'
+import { useT } from '@/lib/i18n'
 import { Loader2, Mail, Lock, Eye, EyeOff } from 'lucide-react'
 
 export default function LoginPage() {
   const router = useRouter()
   const { signIn } = useAuth()
+  const t = useT()
 
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
@@ -24,13 +26,19 @@ export default function LoginPage() {
     setError(null)
     setLoading(true)
 
-    const { error } = await signIn(email, password)
+    const { data, error } = await signIn(email, password)
 
     if (error) {
       setError(error.message === 'Invalid login credentials'
-        ? 'Неверный email или пароль'
+        ? t("auth.invalidCredentials")
         : error.message)
       setLoading(false)
+      return
+    }
+
+    // Redirect unverified phone users to verification page
+    if (data?.user?.phone && !data.user.phone_verified) {
+      router.push('/verify-phone')
       return
     }
 
@@ -41,15 +49,15 @@ export default function LoginPage() {
   return (
     <div className="glass-card p-8">
       <div className="text-center mb-6">
-        <h2 className="text-2xl font-semibold text-foreground">Вход в аккаунт</h2>
+        <h2 className="text-2xl font-semibold text-foreground">{t("auth.loginTitle")}</h2>
         <p className="text-muted-foreground mt-1">
-          Введите ваши данные для входа
+          {t("auth.loginSubtitle")}
         </p>
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="email">Email</Label>
+          <Label htmlFor="email">{t("auth.email")}</Label>
           <div className="relative">
             <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
             <Input
@@ -67,12 +75,12 @@ export default function LoginPage() {
 
         <div className="space-y-2">
           <div className="flex items-center justify-between">
-            <Label htmlFor="password">Пароль</Label>
+            <Label htmlFor="password">{t("auth.password")}</Label>
             <Link
               href="/forgot-password"
               className="text-sm text-primary hover:underline"
             >
-              Забыли пароль?
+              {t("auth.forgotPassword")}
             </Link>
           </div>
           <div className="relative">
@@ -80,7 +88,7 @@ export default function LoginPage() {
             <Input
               id="password"
               type={showPassword ? 'text' : 'password'}
-              placeholder="Введите пароль"
+              placeholder={t("auth.enterPassword")}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
               className="pl-10 pr-10"
@@ -111,18 +119,18 @@ export default function LoginPage() {
           {loading ? (
             <>
               <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Вход...
+              {t("auth.signingIn")}
             </>
           ) : (
-            'Войти'
+            t("auth.signIn")
           )}
         </Button>
       </form>
 
       <div className="mt-6 text-center text-sm text-muted-foreground">
-        Нет аккаунта?{' '}
+        {t("auth.noAccount")}{' '}
         <Link href="/register" className="text-primary hover:underline font-medium">
-          Зарегистрироваться
+          {t("auth.register")}
         </Link>
       </div>
     </div>

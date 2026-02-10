@@ -1,16 +1,21 @@
-"""Authentication router - handles user registration, login, and password management"""
+"""Authentication router - handles user registration, login, password management, and phone OTP verification"""
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from typing import Annotated
+from collections import defaultdict
+from time import time
 import asyncpg
 import uuid
-from datetime import timedelta
+import random
+import logging
+from datetime import timedelta, datetime
 
 from ..schemas.auth import (
     UserRegister,
     UserLogin,
     Token,
     UserResponse,
+    VerifyOtpRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
 )
@@ -23,16 +28,64 @@ from ..core.security import (
 from ..core.exceptions import AuthenticationError
 from ..dependencies import get_current_user
 from ..config import settings
+from ..services.notification_service import notify_referral_signup
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
+# In-memory rate limiting for auth endpoints
+_login_attempts: dict[str, list[float]] = defaultdict(list)
+_register_attempts: dict[str, list[float]] = defaultdict(list)
 
-@router.post("/register", response_model=UserResponse, status_code=status.HTTP_201_CREATED)
+
+def _check_rate_limit(store: dict, key: str, max_attempts: int, window: int):
+    """Check IP-based rate limit. Raises 429 if exceeded."""
+    now = time()
+    store[key] = [t for t in store[key] if now - t < window]
+    if len(store[key]) >= max_attempts:
+        raise HTTPException(status_code=429, detail="Too many attempts. Please try again later.")
+    store[key].append(now)
+
+
+async def _send_otp(conn, user_id: uuid.UUID, phone: str):
+    """Generate and send OTP code via WhatsApp. Returns the verification ID."""
+    code = f"{random.randint(0, 999999):06d}"
+    expires_at = datetime.utcnow() + timedelta(minutes=5)
+
+    row = await conn.fetchrow(
+        """
+        INSERT INTO phone_verifications (user_id, phone, code, expires_at)
+        VALUES ($1, $2, $3, $4)
+        RETURNING id
+        """,
+        user_id, phone, code, expires_at
+    )
+
+    # Send via WAHA
+    try:
+        from ..services.waha_service import get_waha_service
+        waha = get_waha_service()
+        await waha.send_text(phone, f"Cube Demper: Ваш код подтверждения: {code}", session=settings.waha_otp_session)
+        logger.info(f"OTP sent to {phone[:4]}***{phone[-2:]} for user {user_id}")
+    except Exception as e:
+        logger.error(f"Failed to send OTP via WhatsApp to {phone}: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Failed to send verification code via WhatsApp. Please try again."
+        )
+
+    return row['id']
+
+
+@router.post("/register", response_model=Token, status_code=status.HTTP_201_CREATED)
 async def register(
+    request: Request,
     user_data: UserRegister,
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
-    """Register a new user"""
+    """Register a new user and return JWT token"""
+    _check_rate_limit(_register_attempts, request.client.host, max_attempts=3, window=60)
     async with pool.acquire() as conn:
         # Check if user already exists
         existing_user = await conn.fetchrow(
@@ -49,44 +102,82 @@ async def register(
         # Hash password
         password_hash = get_password_hash(user_data.password)
 
-        # Create user
+        # Create user with phone
         user = await conn.fetchrow(
             """
-            INSERT INTO users (email, password_hash, full_name, role)
-            VALUES ($1, $2, $3, 'user')
+            INSERT INTO users (email, password_hash, full_name, phone, phone_verified, role)
+            VALUES ($1, $2, $3, $4, FALSE, 'user')
             RETURNING id, email, full_name, role, created_at, updated_at
             """,
             user_data.email,
             password_hash,
-            user_data.full_name
+            user_data.full_name,
+            user_data.phone
         )
 
-        # Create free subscription for new user
+        # Create free subscription for new user (with plan_id pointing to free plan)
+        free_plan_id = await conn.fetchval(
+            "SELECT id FROM plans WHERE code = 'free' AND is_active = true"
+        )
         await conn.execute(
             """
-            INSERT INTO subscriptions (user_id, plan, status, products_limit, current_period_start, current_period_end)
-            VALUES ($1, 'free', 'active', $2, NOW(), NOW() + INTERVAL '1 year')
+            INSERT INTO subscriptions (user_id, plan, plan_id, status, products_limit,
+                                       analytics_limit, demping_limit,
+                                       current_period_start, current_period_end)
+            VALUES ($1, 'free', $2, 'active', $3, 0, 0, NOW(), NOW() + INTERVAL '1 year')
             """,
             user['id'],
+            free_plan_id,
             settings.plan_free_products_limit
         )
 
-        return UserResponse(
-            id=str(user['id']),
-            email=user['email'],
-            full_name=user['full_name'],
+        # Process referral code
+        if user_data.ref_code:
+            try:
+                referrer = await conn.fetchrow(
+                    "SELECT id, email FROM users WHERE UPPER(referral_code) = $1",
+                    user_data.ref_code.strip().upper()
+                )
+                if referrer:
+                    await conn.execute(
+                        "UPDATE users SET referred_by = $1 WHERE id = $2",
+                        referrer['id'], user['id']
+                    )
+                    await conn.execute(
+                        "UPDATE users SET referral_clicks = COALESCE(referral_clicks, 0) + 1 WHERE id = $1",
+                        referrer['id']
+                    )
+                    logger.info(f"[REFERRAL] User {user['id']} registered with ref_code={user_data.ref_code}, referrer={referrer['id']}")
+                    try:
+                        await notify_referral_signup(pool, referrer['id'], user_data.email)
+                    except Exception as e:
+                        logger.error(f"[REFERRAL] Failed to send signup notification: {e}")
+                else:
+                    logger.warning(f"[REFERRAL] Invalid ref_code={user_data.ref_code} during registration")
+            except Exception as e:
+                logger.error(f"[REFERRAL] Error processing ref_code: {e}")
+
+        # Send OTP
+        await _send_otp(conn, user['id'], user_data.phone)
+
+        # Return JWT token (auto-login)
+        access_token = create_access_token(
+            user_id=user['id'],
             role=user['role'],
-            created_at=user['created_at'],
-            updated_at=user['updated_at']
+            expires_delta=timedelta(hours=settings.access_token_expire_hours)
         )
+
+        return Token(access_token=access_token, token_type="bearer")
 
 
 @router.post("/login", response_model=Token)
 async def login(
+    request: Request,
     credentials: UserLogin,
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """Login user and return JWT token"""
+    _check_rate_limit(_login_attempts, request.client.host, max_attempts=5, window=60)
     async with pool.acquire() as conn:
         user = await conn.fetchrow(
             "SELECT id, email, password_hash, role, is_blocked FROM users WHERE email = $1",
@@ -126,10 +217,100 @@ async def get_current_user_info(
         id=str(current_user['id']),
         email=current_user['email'],
         full_name=current_user['full_name'],
+        phone=current_user.get('phone'),
+        phone_verified=current_user.get('phone_verified', False),
         role=current_user['role'],
         created_at=current_user['created_at'],
         updated_at=current_user['updated_at']
     )
+
+
+@router.post("/send-otp")
+async def send_otp(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Send or resend OTP code via WhatsApp"""
+    user_id = current_user['id']
+    phone = current_user.get('phone')
+
+    if not phone:
+        raise HTTPException(status_code=400, detail="No phone number on account")
+
+    if current_user.get('phone_verified', False):
+        raise HTTPException(status_code=400, detail="Phone already verified")
+
+    async with pool.acquire() as conn:
+        # Rate limit: 1 OTP per 60 seconds
+        recent = await conn.fetchval(
+            """
+            SELECT id FROM phone_verifications
+            WHERE user_id = $1 AND created_at > NOW() - INTERVAL '60 seconds'
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            user_id
+        )
+        if recent:
+            raise HTTPException(status_code=429, detail="Please wait 60 seconds before requesting a new code")
+
+        await _send_otp(conn, user_id, phone)
+
+    return {"status": "sent"}
+
+
+@router.post("/verify-otp")
+async def verify_otp(
+    request: VerifyOtpRequest,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Verify OTP code and mark phone as verified"""
+    user_id = current_user['id']
+
+    async with pool.acquire() as conn:
+        # Get the latest unverified OTP
+        verification = await conn.fetchrow(
+            """
+            SELECT id, code, attempts, expires_at FROM phone_verifications
+            WHERE user_id = $1 AND verified_at IS NULL
+            ORDER BY created_at DESC LIMIT 1
+            """,
+            user_id
+        )
+
+        if not verification:
+            raise HTTPException(status_code=400, detail="No pending verification. Request a new code.")
+
+        # Check expiry
+        if datetime.utcnow() > verification['expires_at']:
+            raise HTTPException(status_code=400, detail="Code expired. Request a new code.")
+
+        # Check attempts
+        if verification['attempts'] >= 5:
+            raise HTTPException(status_code=400, detail="Too many attempts. Request a new code.")
+
+        # Increment attempts
+        await conn.execute(
+            "UPDATE phone_verifications SET attempts = attempts + 1 WHERE id = $1",
+            verification['id']
+        )
+
+        # Verify code
+        if verification['code'] != request.code:
+            remaining = 4 - verification['attempts']  # already incremented above conceptually
+            raise HTTPException(status_code=400, detail=f"Invalid code. {max(remaining, 0)} attempts remaining.")
+
+        # Mark verified
+        await conn.execute(
+            "UPDATE phone_verifications SET verified_at = NOW() WHERE id = $1",
+            verification['id']
+        )
+        await conn.execute(
+            "UPDATE users SET phone_verified = TRUE WHERE id = $1",
+            user_id
+        )
+
+    return {"status": "verified"}
 
 
 @router.post("/forgot-password", status_code=status.HTTP_200_OK)
@@ -155,8 +336,7 @@ async def forgot_password(
             )
             # TODO: Send email with reset_token
             # Token generated but not logged for security
-            import logging
-            logging.getLogger(__name__).info(f"Password reset requested for user_id={user['id']}")
+            logger.info(f"Password reset requested for user_id={user['id']}")
 
         return {"message": "If the email exists, a password reset link has been sent"}
 

@@ -1,3 +1,4 @@
+import Image from 'next/image'
 import Link from 'next/link'
 import { MessageSquare, Send, Instagram } from 'lucide-react'
 
@@ -32,8 +33,9 @@ export function Footer() {
         <div className="grid grid-cols-2 md:grid-cols-4 gap-8">
           {/* Brand */}
           <div className="col-span-2 md:col-span-1">
-            <Link href="/" className="text-xl font-bold text-foreground">
-              Demper
+            <Link href="/" className="inline-block">
+              <Image src="/logodark.svg" alt="Demper" width={120} height={42} className="h-8 w-auto dark:hidden" />
+              <Image src="/logowhite.svg" alt="Demper" width={120} height={42} className="h-8 w-auto hidden dark:block" />
             </Link>
             <p className="text-sm text-muted-foreground mt-2">
               Автоматизация продаж на Kaspi.kz

@@ -107,6 +107,25 @@ export function useSessionQRCode(sessionId: string, enabled: boolean = true) {
   })
 }
 
+export interface PairPhoneResponse {
+  code: string
+  status: string
+}
+
+export function usePairByPhone() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ sessionId, phoneNumber }: { sessionId: string; phoneNumber: string }) =>
+      api.post<PairPhoneResponse>(`/whatsapp/sessions/${sessionId}/pair-phone`, {
+        phone_number: phoneNumber,
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: whatsappKeys.sessions() })
+    },
+  })
+}
+
 export function useDeleteSession() {
   const queryClient = useQueryClient()
 

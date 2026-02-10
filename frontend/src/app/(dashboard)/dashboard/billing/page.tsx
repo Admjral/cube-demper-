@@ -3,75 +3,41 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Button } from '@/components/ui/button'
 import { Badge } from '@/components/ui/badge'
-import { useFeatures, usePlansV2, useAddons } from '@/hooks/api/use-features'
-import { useAuth } from '@/hooks/use-auth'
+import { useFeatures, usePlansV2, useAddons, useActivateTrial } from '@/hooks/api/use-features'
+import { useT } from '@/lib/i18n'
 import {
   CreditCard,
   Check,
-  Sparkles,
-  Crown,
-  Zap,
   Loader2,
   AlertCircle,
   MessageSquare,
   BarChart3,
-  ShoppingCart,
-  Bot,
-  Package,
   TrendingUp,
+  Clock,
+  Sparkles,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
+import { featureLabels, planConfig, getDaysRemaining, getDaysColor, getDaysText } from '@/lib/features'
 import { format } from 'date-fns'
 import { ru } from 'date-fns/locale'
-
-// Feature labels for display
-const featureLabels: Record<string, string> = {
-  analytics: 'Аналитика',
-  demping: 'Демпинг',
-  exclude_own_stores: 'Не конкурировать со своими',
-  invoice_glue: 'Склейка накладных',
-  orders_view: 'Просмотр заказов',
-  unit_economics: 'Юнит экономика',
-  ai_lawyer: 'ИИ юрист',
-  priority_support: 'Приоритетная поддержка 24/7',
-  preorder: 'Предзаказы',
-  whatsapp_auto: 'Авто рассылка WhatsApp',
-  whatsapp_bulk: 'Массовая рассылка WhatsApp',
-  ai_salesman: 'ИИ продажник',
-}
-
-// Plan icons and styles
-const planConfig: Record<string, { icon: typeof Zap; color: string }> = {
-  basic: { icon: Zap, color: 'text-blue-500' },
-  standard: { icon: Crown, color: 'text-amber-500' },
-  premium: { icon: Sparkles, color: 'text-purple-500' },
-}
+import { Zap } from 'lucide-react'
 
 export default function BillingPage() {
-  const { user } = useAuth()
+  const t = useT()
   const { data: features, isLoading: featuresLoading } = useFeatures()
   const { data: plans, isLoading: plansLoading } = usePlansV2()
   const { data: addons, isLoading: addonsLoading } = useAddons()
 
   const isLoading = featuresLoading || plansLoading || addonsLoading
 
+  const activateTrial = useActivateTrial()
+
   const handleContactSupport = () => {
-    // Open support widget or redirect to contact
-    window.open('https://wa.me/77771234567', '_blank')
+    window.open('https://wa.me/77474576759', '_blank')
   }
 
-  // Calculate limit usage (mock values - in production, get from backend)
-  const analyticsUsed = 0 // TODO: get from backend
-  const dempingUsed = 0 // TODO: get from backend
-
-  const getLimitDisplay = (limit: number) => {
-    return limit === -1 ? 'Безлимит' : limit.toString()
-  }
-
-  const getLimitProgress = (used: number, limit: number) => {
-    if (limit === -1) return 0
-    return Math.min((used / limit) * 100, 100)
-  }
+  const daysRemaining = getDaysRemaining(features?.subscription_ends_at)
+  const trialDaysRemaining = getDaysRemaining(features?.trial_ends_at)
 
   return (
     <div className="space-y-6">
@@ -79,10 +45,10 @@ export default function BillingPage() {
       <div>
         <h1 className="text-2xl font-semibold flex items-center gap-2">
           <CreditCard className="h-6 w-6" />
-          Тарифы и подписка
+          {t("billing.title")}
         </h1>
         <p className="text-muted-foreground">
-          Выберите план, который подходит вашему бизнесу
+          {t("billing.subtitle")}
         </p>
       </div>
 
@@ -93,90 +59,74 @@ export default function BillingPage() {
       ) : (
         <>
           {/* Current subscription */}
-          {features?.has_active_subscription ? (
+          {features?.has_active_subscription && features?.plan_code && features.plan_code !== 'free' ? (
             <Card className="glass-card border-primary/20 bg-primary/5">
               <CardContent className="pt-6">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                   <div>
-                    <p className="text-sm text-muted-foreground">Текущий план</p>
+                    <p className="text-sm text-muted-foreground">{t("billing.currentPlan")}</p>
                     <div className="flex items-center gap-2 mt-1">
                       <p className="text-xl font-semibold text-foreground">
-                        {features.plan_name || 'Нет подписки'}
+                        {features.plan_name || t("billing.plan")}
                       </p>
                       {features.is_trial && (
                         <Badge variant="outline" className="gap-1">
-                          <Sparkles className="h-3 w-3" />
-                          Пробный период
+                          {t("billing.trial")}
                         </Badge>
                       )}
                     </div>
                     {features.subscription_ends_at && (
-                      <p className="text-sm text-muted-foreground mt-1">
-                        Активен до {format(new Date(features.subscription_ends_at), 'd MMMM yyyy', { locale: ru })}
-                      </p>
+                      <div className="flex items-center gap-2 mt-1">
+                        <p className="text-sm text-muted-foreground">
+                          {t("billing.activeUntil")} {format(new Date(features.subscription_ends_at), 'd MMMM yyyy', { locale: ru })}
+                        </p>
+                        {daysRemaining !== null && (
+                          <span className={cn("text-sm font-medium flex items-center gap-1", getDaysColor(daysRemaining))}>
+                            <Clock className="h-3.5 w-3.5" />
+                            {getDaysText(daysRemaining)}
+                          </span>
+                        )}
+                      </div>
                     )}
-                    {features.is_trial && features.trial_ends_at && (
+                    {features.is_trial && features.trial_ends_at && trialDaysRemaining !== null && (
                       <p className="text-sm text-muted-foreground">
-                        Пробный период до {format(new Date(features.trial_ends_at), 'd MMMM yyyy', { locale: ru })}
+                        {t("billing.trialPeriod")} {getDaysText(trialDaysRemaining)} осталось
                       </p>
                     )}
                   </div>
                   <Badge variant="default" className="self-start sm:self-center">
-                    Активна
+                    {t("billing.active")}
                   </Badge>
                 </div>
 
                 {/* Limits */}
                 <div className="grid sm:grid-cols-2 gap-4 mt-6">
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground flex items-center gap-2">
-                        <BarChart3 className="h-4 w-4" />
-                        Аналитика
-                      </span>
-                      <span className="font-medium">
-                        {analyticsUsed} / {getLimitDisplay(features.analytics_limit)}
-                      </span>
-                    </div>
-                    {features.analytics_limit !== -1 && (
-                      <div className="h-2 bg-muted rounded-full overflow-hidden">
-                        <div
-                          className="h-full bg-primary rounded-full transition-all"
-                          style={{ width: `${getLimitProgress(analyticsUsed, features.analytics_limit)}%` }}
-                        />
-                      </div>
-                    )}
+                  <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                    <span className="text-sm text-muted-foreground flex items-center gap-2">
+                      <BarChart3 className="h-4 w-4" />
+                      {t("billing.analytics")}
+                    </span>
+                    <span className="font-medium text-sm">
+                      {features.analytics_limit === -1 ? t("billing.unlimited") : `до ${features.analytics_limit} ${t("common.products")}`}
+                    </span>
                   </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-muted-foreground flex items-center gap-2">
-                        <TrendingUp className="h-4 w-4" />
-                        Демпинг
-                      </span>
-                      <span className="font-medium">
-                        {dempingUsed} / {features.demping_limit}
-                      </span>
-                    </div>
-                    <div className="h-2 bg-muted rounded-full overflow-hidden">
-                      <div
-                        className={cn(
-                          "h-full rounded-full transition-all",
-                          getLimitProgress(dempingUsed, features.demping_limit) >= 80
-                            ? "bg-yellow-500"
-                            : "bg-primary"
-                        )}
-                        style={{ width: `${getLimitProgress(dempingUsed, features.demping_limit)}%` }}
-                      />
-                    </div>
+                  <div className="flex items-center justify-between p-3 bg-muted/50 rounded-lg">
+                    <span className="text-sm text-muted-foreground flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4" />
+                      {t("billing.demping")}
+                    </span>
+                    <span className="font-medium text-sm">
+                      до {features.demping_limit} {t("common.products")}
+                    </span>
                   </div>
                 </div>
 
                 {/* Features */}
-                {features.features.length > 0 && (
-                  <div className="mt-6 pt-4 border-t">
-                    <p className="text-sm text-muted-foreground mb-3">Доступные функции:</p>
+                {(features.features || []).length > 0 && (
+                  <div className="mt-4 pt-4 border-t">
+                    <p className="text-sm text-muted-foreground mb-2">{t("billing.features")}</p>
                     <div className="flex flex-wrap gap-2">
-                      {features.features.map((feature) => (
+                      {(features.features || []).map((feature) => (
                         <Badge key={feature} variant="secondary">
                           {featureLabels[feature] || feature}
                         </Badge>
@@ -187,39 +137,41 @@ export default function BillingPage() {
               </CardContent>
             </Card>
           ) : (
-            <Card className="glass-card border-yellow-500/20 bg-yellow-500/5">
-              <CardContent className="pt-6">
-                <div className="flex items-center gap-3">
-                  <div className="w-10 h-10 rounded-full bg-yellow-500/20 flex items-center justify-center">
-                    <AlertCircle className="h-5 w-5 text-yellow-500" />
+            <Card className="glass-card border-green-500/30 bg-green-500/5">
+              <CardContent className="pt-6 pb-6">
+                <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
+                      <Sparkles className="h-5 w-5 text-green-500" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-foreground">{t("billing.freePlan")}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {t("billing.tryFree")}
+                      </p>
+                    </div>
                   </div>
-                  <div>
-                    <p className="font-medium text-foreground">Нет активной подписки</p>
-                    <p className="text-sm text-muted-foreground">
-                      Свяжитесь с поддержкой для оформления подписки
-                    </p>
-                  </div>
+                  <Button
+                    className="bg-green-600 hover:bg-green-700 text-white shrink-0"
+                    onClick={() => activateTrial.mutate()}
+                    disabled={activateTrial.isPending}
+                  >
+                    {activateTrial.isPending ? (
+                      <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    ) : (
+                      <Sparkles className="h-4 w-4 mr-2" />
+                    )}
+                    Активировать пробный период
+                  </Button>
                 </div>
+                {activateTrial.isError && (
+                  <p className="text-sm text-red-500 mt-2">
+                    {(activateTrial.error as any)?.message || 'Не удалось активировать пробный период'}
+                  </p>
+                )}
               </CardContent>
             </Card>
           )}
-
-          {/* Promo banner */}
-          <Card className="glass-card border-green-500/20 bg-green-500/5">
-            <CardContent className="pt-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-green-500/20 flex items-center justify-center">
-                  <Sparkles className="h-5 w-5 text-green-500" />
-                </div>
-                <div>
-                  <p className="font-medium text-foreground">Бета-тест бесплатно!</p>
-                  <p className="text-sm text-muted-foreground">
-                    Попробуйте тариф Базовый бесплатно в течение 3 дней
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
 
           {/* Plans */}
           <div>
@@ -251,22 +203,22 @@ export default function BillingPage() {
                       <CardTitle className="text-lg">{plan.name}</CardTitle>
                       <div className="flex items-center gap-2 text-sm text-muted-foreground">
                         <BarChart3 className="h-4 w-4" />
-                        {plan.analytics_limit === -1 ? 'Безлимит' : plan.analytics_limit} товаров
+                        {plan.analytics_limit === -1 ? t("billing.unlimited") : plan.analytics_limit} {t("common.products")}
                         <span className="mx-1">•</span>
                         <TrendingUp className="h-4 w-4" />
-                        {plan.demping_limit} демпинг
+                        {plan.demping_limit} {t("billing.demping").toLowerCase()}
                       </div>
                     </CardHeader>
                     <CardContent>
                       <div className="mb-4">
                         <span className="text-3xl font-bold text-foreground">
-                          {(plan.price / 100).toLocaleString()}
+                          {plan.price.toLocaleString()}
                         </span>
                         <span className="text-muted-foreground"> ₸/мес</span>
                       </div>
 
                       <ul className="space-y-2 mb-6">
-                        {plan.features.map((feature) => (
+                        {(plan.features || []).map((feature) => (
                           <li key={feature} className="flex items-start gap-2 text-sm">
                             <Check className="h-4 w-4 text-green-500 mt-0.5 shrink-0" />
                             <span className="text-muted-foreground">
@@ -276,9 +228,9 @@ export default function BillingPage() {
                         ))}
                       </ul>
 
-                      {plan.trial_days > 0 && (
-                        <p className="text-xs text-muted-foreground mb-4 text-center">
-                          {plan.trial_days} дней бесплатно
+                      {plan.trial_days > 0 && (!features?.plan_code || features.plan_code === 'free') && (
+                        <p className="text-xs text-green-600 mb-4 text-center font-medium">
+                          {plan.trial_days} дня бесплатного пробного периода
                         </p>
                       )}
 
@@ -289,7 +241,7 @@ export default function BillingPage() {
                         onClick={handleContactSupport}
                       >
                         {isCurrentPlan ? (
-                          'Текущий план'
+                          t("billing.currentPlan")
                         ) : (
                           <>
                             <MessageSquare className="h-4 w-4 mr-2" />
@@ -309,8 +261,8 @@ export default function BillingPage() {
             <h2 className="text-lg font-semibold mb-4">Дополнительные услуги</h2>
             <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
               {addons?.map((addon) => {
-                const hasAddon = features?.features.some(f =>
-                  addon.features.includes(f)
+                const hasAddon = (features?.features || []).some(f =>
+                  (addon.features || []).includes(f)
                 )
 
                 return (
@@ -330,16 +282,10 @@ export default function BillingPage() {
                           <p className="text-sm text-muted-foreground mt-1">
                             {addon.description}
                           </p>
-                          {addon.stackable && (
-                            <Badge variant="outline" className="mt-2 text-xs">
-                              <Package className="h-3 w-3 mr-1" />
-                              Можно покупать несколько раз
-                            </Badge>
-                          )}
                         </div>
                         <div className="text-right">
                           <p className="text-xl font-bold text-foreground">
-                            {(addon.price / 100).toLocaleString()}
+                            {addon.price.toLocaleString()}
                           </p>
                           <span className="text-xs text-muted-foreground">₸/мес</span>
                         </div>
@@ -361,24 +307,6 @@ export default function BillingPage() {
               })}
             </div>
           </div>
-
-          {/* Contact info */}
-          <Card className="glass-card">
-            <CardContent className="pt-6">
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-                <div>
-                  <h3 className="font-medium text-foreground">Как оформить подписку?</h3>
-                  <p className="text-sm text-muted-foreground mt-1">
-                    Свяжитесь с нами в WhatsApp для оформления подписки или активации бета-теста
-                  </p>
-                </div>
-                <Button onClick={handleContactSupport}>
-                  <MessageSquare className="h-4 w-4 mr-2" />
-                  Написать в WhatsApp
-                </Button>
-              </div>
-            </CardContent>
-          </Card>
         </>
       )}
     </div>

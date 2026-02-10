@@ -1017,17 +1017,29 @@ async def sync_orders_to_db(
                     # Upsert order items (only for new orders)
                     if result["inserted"]:
                         for entry in parsed["entries"]:
-                            # Try to find matching product
-                            product = await conn.fetchrow(
-                                """
-                                SELECT id FROM products
-                                WHERE store_id = $1 AND (kaspi_product_id = $2 OR kaspi_sku = $3)
-                                LIMIT 1
-                                """,
-                                uuid_module.UUID(store_id),
-                                entry["kaspi_product_id"],
-                                entry["sku"]
-                            )
+                            # Try to find matching product (by code/sku, fallback to name)
+                            product = None
+                            if entry["kaspi_product_id"] or entry["sku"]:
+                                product = await conn.fetchrow(
+                                    """
+                                    SELECT id FROM products
+                                    WHERE store_id = $1 AND (kaspi_product_id = $2 OR kaspi_sku = $3)
+                                    LIMIT 1
+                                    """,
+                                    uuid_module.UUID(store_id),
+                                    entry["kaspi_product_id"],
+                                    entry["sku"]
+                                )
+                            if not product and entry.get("name"):
+                                product = await conn.fetchrow(
+                                    """
+                                    SELECT id FROM products
+                                    WHERE store_id = $1 AND name = $2
+                                    LIMIT 1
+                                    """,
+                                    uuid_module.UUID(store_id),
+                                    entry["name"]
+                                )
 
                             await conn.execute(
                                 """
@@ -1045,6 +1057,13 @@ async def sync_orders_to_db(
                                 entry["quantity"],
                                 entry["price"],
                             )
+
+                            # Update sales_count for matched product
+                            if product:
+                                await conn.execute(
+                                    "UPDATE products SET sales_count = COALESCE(sales_count, 0) + $1 WHERE id = $2",
+                                    entry["quantity"], product["id"]
+                                )
 
                 except Exception as e:
                     logger.error(f"Error syncing order: {e}")

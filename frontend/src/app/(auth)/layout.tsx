@@ -1,3 +1,4 @@
+import Image from "next/image"
 import { ThemeToggle } from "@/components/shared/theme-toggle"
 
 export default function AuthLayout({
@@ -16,9 +17,10 @@ export default function AuthLayout({
       </div>
 
       {/* Logo */}
-      <div className="mb-8 text-center">
-        <h1 className="text-3xl font-bold text-foreground">Demper</h1>
-        <p className="text-muted-foreground mt-1">Kaspi Seller Panel</p>
+      <div className="mb-8 flex flex-col items-center">
+        <Image src="/logodark.svg" alt="Demper" width={180} height={62} className="h-12 w-auto dark:hidden" priority />
+        <Image src="/logowhite.svg" alt="Demper" width={180} height={62} className="h-12 w-auto hidden dark:block" priority />
+        <p className="text-muted-foreground mt-2">Kaspi Seller Panel</p>
       </div>
 
       {/* Auth card */}

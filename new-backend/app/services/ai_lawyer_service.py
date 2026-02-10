@@ -10,6 +10,7 @@ Features:
 Uses Google Gemini for LLM and embeddings.
 """
 import logging
+import asyncio
 import asyncpg
 import json
 from typing import Optional, Dict, Any, List, Tuple
@@ -20,10 +21,13 @@ from dataclasses import dataclass
 import google.generativeai as genai
 
 from ..config import settings
+from ..core.circuit_breaker import get_circuit_breaker, CircuitBreakerConfig, CircuitOpenError
 from ..schemas.lawyer import (
     LawyerLanguage, DocumentType, TaxType, RiskLevel,
     ContractRisk, TaxCalculationItem
 )
+
+GEMINI_TIMEOUT = 30  # seconds
 
 logger = logging.getLogger(__name__)
 
@@ -286,6 +290,176 @@ ___________________ / {claimant_name} /
 
 Дата: {date}
 """,
+
+    DocumentType.SALE_CONTRACT: """# ДОГОВОР КУПЛИ-ПРОДАЖИ № {number}
+
+г. {city}                                                              «{date}»
+
+{seller_type} «{seller_name}»{seller_bin_text}, в лице {seller_representative}, действующего на основании {seller_basis}, именуемый в дальнейшем «Продавец», с одной стороны, и
+
+{buyer_type} «{buyer_name}»{buyer_bin_text}, в лице {buyer_representative}, действующего на основании {buyer_basis}, именуемый в дальнейшем «Покупатель», с другой стороны,
+
+совместно именуемые «Стороны», заключили настоящий Договор о нижеследующем:
+
+## 1. ПРЕДМЕТ ДОГОВОРА
+
+1.1. Продавец обязуется передать в собственность Покупателю, а Покупатель обязуется принять и оплатить следующий товар:
+{goods_description}
+
+1.2. Общая стоимость товара составляет: {total_amount} ({total_amount_words}) тенге.
+
+## 2. ПОРЯДОК И СРОКИ ПЕРЕДАЧИ ТОВАРА
+
+2.1. Продавец обязуется передать товар Покупателю в срок до {delivery_date}.
+2.2. Передача товара оформляется актом приёма-передачи, подписанным обеими Сторонами.
+2.3. Право собственности на товар переходит к Покупателю с момента подписания акта приёма-передачи.
+
+## 3. ПОРЯДОК РАСЧЁТОВ
+
+3.1. {payment_terms}
+3.2. Оплата производится путём перечисления денежных средств на расчётный счёт Продавца.
+
+## 4. КАЧЕСТВО ТОВАРА
+
+4.1. Качество товара должно соответствовать стандартам РК и условиям настоящего Договора.
+4.2. Продавец гарантирует, что товар не обременён правами третьих лиц.
+
+## 5. ОТВЕТСТВЕННОСТЬ СТОРОН
+
+5.1. За нарушение сроков передачи товара Продавец уплачивает пеню в размере 0,1% от стоимости товара за каждый день просрочки.
+5.2. За нарушение сроков оплаты Покупатель уплачивает пеню в размере 0,1% от суммы задолженности за каждый день просрочки.
+
+## 6. ФОРС-МАЖОР
+
+6.1. Стороны освобождаются от ответственности за неисполнение обязательств при обстоятельствах непреодолимой силы.
+
+## 7. РАЗРЕШЕНИЕ СПОРОВ
+
+7.1. Все споры разрешаются путём переговоров.
+7.2. При недостижении согласия споры рассматриваются в суде по месту нахождения ответчика в соответствии с законодательством РК.
+
+## 8. РЕКВИЗИТЫ И ПОДПИСИ СТОРОН
+
+**ПРОДАВЕЦ:**
+{seller_type} «{seller_name}»
+{seller_address}
+{seller_bin_line}
+
+___________________ / {seller_representative} /
+
+
+**ПОКУПАТЕЛЬ:**
+{buyer_type} «{buyer_name}»
+{buyer_address}
+{buyer_bin_line}
+
+___________________ / {buyer_representative} /
+""",
+
+    DocumentType.SERVICE_CONTRACT: """# ДОГОВОР ОКАЗАНИЯ УСЛУГ № {number}
+
+г. {city}                                                              «{date}»
+
+{seller_type} «{seller_name}»{seller_bin_text}, в лице {seller_representative}, действующего на основании {seller_basis}, именуемый в дальнейшем «Исполнитель», с одной стороны, и
+
+{buyer_type} «{buyer_name}»{buyer_bin_text}, в лице {buyer_representative}, действующего на основании {buyer_basis}, именуемый в дальнейшем «Заказчик», с другой стороны,
+
+совместно именуемые «Стороны», заключили настоящий Договор о нижеследующем:
+
+## 1. ПРЕДМЕТ ДОГОВОРА
+
+1.1. Исполнитель обязуется оказать Заказчику следующие услуги:
+{goods_description}
+
+1.2. Общая стоимость услуг составляет: {total_amount} ({total_amount_words}) тенге.
+
+## 2. СРОКИ ОКАЗАНИЯ УСЛУГ
+
+2.1. Исполнитель обязуется оказать услуги в срок до {delivery_date}.
+2.2. Факт оказания услуг подтверждается подписанием акта выполненных работ.
+
+## 3. ПОРЯДОК РАСЧЁТОВ
+
+3.1. {payment_terms}
+3.2. Оплата производится путём перечисления денежных средств на расчётный счёт Исполнителя.
+
+## 4. ОБЯЗАННОСТИ СТОРОН
+
+4.1. Исполнитель обязуется оказать услуги качественно и в установленные сроки.
+4.2. Заказчик обязуется предоставить необходимую информацию и своевременно произвести оплату.
+
+## 5. ОТВЕТСТВЕННОСТЬ СТОРОН
+
+5.1. За нарушение сроков оказания услуг Исполнитель уплачивает пеню в размере 0,1% от стоимости услуг за каждый день просрочки.
+5.2. За нарушение сроков оплаты Заказчик уплачивает пеню в размере 0,1% от суммы задолженности за каждый день просрочки.
+
+## 6. ФОРС-МАЖОР
+
+6.1. Стороны освобождаются от ответственности за неисполнение обязательств при обстоятельствах непреодолимой силы.
+
+## 7. РАЗРЕШЕНИЕ СПОРОВ
+
+7.1. Все споры разрешаются путём переговоров.
+7.2. При недостижении согласия споры рассматриваются в суде по месту нахождения ответчика в соответствии с законодательством РК.
+
+## 8. РЕКВИЗИТЫ И ПОДПИСИ СТОРОН
+
+**ИСПОЛНИТЕЛЬ:**
+{seller_type} «{seller_name}»
+{seller_address}
+{seller_bin_line}
+
+___________________ / {seller_representative} /
+
+
+**ЗАКАЗЧИК:**
+{buyer_type} «{buyer_name}»
+{buyer_address}
+{buyer_bin_line}
+
+___________________ / {buyer_representative} /
+""",
+
+    DocumentType.CLAIM_TO_BUYER: """# ПРЕТЕНЗИЯ
+
+{city}                                                                 {date}
+
+**Кому:** {respondent_name}
+{respondent_address}
+
+**От кого:** {claimant_name}
+{claimant_address}
+Тел.: {claimant_contacts}
+
+## ПРЕТЕНЗИЯ
+о ненадлежащем исполнении обязательств по оплате
+
+{contract_info}
+
+{claim_description}
+
+На основании статей 272, 353, 364 Гражданского кодекса Республики Казахстан,
+
+**ТРЕБУЮ:**
+
+{requirements}
+
+{claim_amount_text}
+
+В случае отказа в удовлетворении претензии оставляю за собой право обратиться в суд с требованием о взыскании указанной суммы, а также пени, убытков и судебных расходов.
+
+Претензия должна быть рассмотрена в течение 10 календарных дней с момента её получения.
+
+Приложения:
+1. Копия договора
+2. Копии документов, подтверждающих задолженность
+
+С уважением,
+
+___________________ / {claimant_name} /
+
+Дата: {date}
+""",
 }
 
 
@@ -503,23 +677,36 @@ class AILawyerService:
                     ORDER BY created_at ASC
                     LIMIT 10
                 """, user_id)
-                messages = [{"role": h['role'], "parts": [h['content']]} for h in history]
+                messages = [
+                    {"role": "user" if h['role'] == "user" else "model", "parts": [h['content']]}
+                    for h in history
+                ]
         
-        # Generate response
+        # Generate response with timeout and circuit breaker
+        breaker = get_gemini_circuit_breaker()
         try:
-            model = self._get_model(system_prompt)
-            chat = model.start_chat(history=messages)
-            
-            response = await chat.send_message_async(
-                message,
-                generation_config=genai.GenerationConfig(
-                    max_output_tokens=settings.gemini_max_tokens,
-                    temperature=0.7,
+            async with breaker:
+                model = self._get_model(system_prompt)
+                chat = model.start_chat(history=messages)
+
+                response = await asyncio.wait_for(
+                    chat.send_message_async(
+                        message,
+                        generation_config=genai.GenerationConfig(
+                            max_output_tokens=settings.gemini_max_tokens,
+                            temperature=0.7,
+                        )
+                    ),
+                    timeout=GEMINI_TIMEOUT,
                 )
-            )
-            
-            return response.text, sources
-            
+
+                return response.text, sources
+        except CircuitOpenError:
+            logger.warning("Gemini circuit breaker is open, rejecting request")
+            raise Exception("AI service temporarily unavailable. Please try again later.")
+        except asyncio.TimeoutError:
+            logger.error(f"Gemini API timeout after {GEMINI_TIMEOUT}s")
+            raise Exception("AI service response timed out. Please try again.")
         except Exception as e:
             logger.error(f"Gemini API error: {e}")
             raise
@@ -536,21 +723,32 @@ class AILawyerService:
         """
         prompt = CONTRACT_ANALYSIS_PROMPT.format(contract_text=contract_text[:15000])
         
+        breaker = get_gemini_circuit_breaker()
         try:
-            model = self._get_model()
-            response = await model.generate_content_async(
-                prompt,
-                generation_config=genai.GenerationConfig(
-                    max_output_tokens=4000,
-                    temperature=0.3,
-                    response_mime_type="application/json"
+            async with breaker:
+                model = self._get_model()
+                response = await asyncio.wait_for(
+                    model.generate_content_async(
+                        prompt,
+                        generation_config=genai.GenerationConfig(
+                            max_output_tokens=4000,
+                            temperature=0.3,
+                            response_mime_type="application/json"
+                        )
+                    ),
+                    timeout=GEMINI_TIMEOUT,
                 )
-            )
-            
+
             # Parse JSON response
             result = json.loads(response.text)
             return result
-            
+
+        except CircuitOpenError:
+            logger.warning("Gemini circuit breaker is open, rejecting contract analysis")
+            raise Exception("AI service temporarily unavailable. Please try again later.")
+        except asyncio.TimeoutError:
+            logger.error(f"Gemini contract analysis timeout after {GEMINI_TIMEOUT}s")
+            raise Exception("AI service response timed out. Please try again.")
         except json.JSONDecodeError:
             # If JSON parsing fails, return basic structure
             logger.error("Failed to parse contract analysis JSON")
@@ -587,23 +785,24 @@ class AILawyerService:
         data.setdefault('city', 'Алматы')
         
         # Process specific fields based on document type
-        if document_type == DocumentType.SUPPLY_CONTRACT:
+        if document_type in (DocumentType.SUPPLY_CONTRACT, DocumentType.SALE_CONTRACT, DocumentType.SERVICE_CONTRACT):
             data = self._prepare_supply_contract_data(data)
         elif document_type == DocumentType.EMPLOYMENT_CONTRACT:
             data = self._prepare_employment_contract_data(data)
-        elif document_type == DocumentType.CLAIM_TO_SUPPLIER:
+        elif document_type in (DocumentType.CLAIM_TO_SUPPLIER, DocumentType.CLAIM_TO_BUYER):
             data = self._prepare_claim_data(data)
-        
+
         # Fill template
         content = template.format(**data)
-        
+
         # Generate title
         titles = {
             DocumentType.SUPPLY_CONTRACT: f"Договор поставки № {data['number']}",
             DocumentType.SALE_CONTRACT: f"Договор купли-продажи № {data['number']}",
             DocumentType.SERVICE_CONTRACT: f"Договор оказания услуг № {data['number']}",
             DocumentType.EMPLOYMENT_CONTRACT: f"Трудовой договор № {data['number']}",
-            DocumentType.CLAIM_TO_SUPPLIER: f"Претензия от {data['date']}",
+            DocumentType.CLAIM_TO_SUPPLIER: f"Претензия поставщику от {data['date']}",
+            DocumentType.CLAIM_TO_BUYER: f"Претензия покупателю от {data['date']}",
         }
         title = titles.get(document_type, f"Документ № {data['number']}")
         
@@ -613,6 +812,10 @@ class AILawyerService:
         """Prepare data for supply contract template"""
         data.setdefault('seller_representative', 'Директора')
         data.setdefault('buyer_representative', 'Директора')
+        data.setdefault('seller_basis', 'Устава')
+        data.setdefault('buyer_basis', 'Устава')
+        data.setdefault('seller_address', '')
+        data.setdefault('buyer_address', '')
         data.setdefault('payment_terms', 'Оплата производится в течение 5 банковских дней после поставки товара.')
         
         # Format BIN lines
@@ -930,6 +1133,16 @@ class AILawyerService:
 Минимум: 1 МРП = {mrp:,} тенге
 
 Итого госпошлина: {fee:,} тенге""".replace(',', ' ')
+
+
+def get_gemini_circuit_breaker():
+    """Get circuit breaker for Gemini API calls."""
+    return get_circuit_breaker("gemini_api", CircuitBreakerConfig(
+        failure_threshold=3,
+        success_threshold=1,
+        timeout_seconds=60.0,
+        half_open_max_calls=1,
+    ))
 
 
 # Singleton instance

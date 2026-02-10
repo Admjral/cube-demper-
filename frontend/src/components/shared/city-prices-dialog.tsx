@@ -301,7 +301,7 @@ export function CityPricesDialog({
                     <CardTitle className="text-base">Настройки для всех городов</CardTitle>
                   </CardHeader>
                   <CardContent className="space-y-4">
-                    <div className="grid grid-cols-2 gap-4">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div>
                         <Label>Минимальная цена (₸)</Label>
                         <Input
@@ -379,7 +379,7 @@ export function CityPricesDialog({
                               </span>
                             </div>
                           </div>
-                          <div className="grid grid-cols-2 gap-2">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                             <Input
                               type="number"
                               placeholder="Мин. цена"

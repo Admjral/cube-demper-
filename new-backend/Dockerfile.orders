@@ -15,8 +15,12 @@ RUN pip install --no-cache-dir -r requirements.txt
 # Copy application
 COPY . .
 
-# Create logs directory
-RUN mkdir -p logs
+# Create non-root user
+RUN useradd -m -r appuser && \
+    mkdir -p logs && \
+    chown -R appuser:appuser /app
+
+USER appuser
 
 # Run orders worker
 CMD ["python", "-m", "app.workers.orders_worker"]

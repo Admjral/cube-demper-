@@ -256,7 +256,7 @@ export function ProductDempingDialog({ productId, open, onOpenChange }: ProductD
               {/* Ценовые ограничения */}
               <div className="space-y-2">
                 <Label>Ценовые ограничения</Label>
-                <div className="grid grid-cols-2 gap-4">
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
                     <Label className="text-sm text-muted-foreground">Минимальная цена (₸)</Label>
                     <Input
@@ -309,7 +309,7 @@ export function ProductDempingDialog({ productId, open, onOpenChange }: ProductD
                 <CardHeader>
                   <CardTitle className="text-sm">Глобальные настройки магазина</CardTitle>
                 </CardHeader>
-                <CardContent className="grid grid-cols-3 gap-4 text-sm">
+                <CardContent className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
                   <div>
                     <p className="text-muted-foreground">Часы работы</p>
                     <p className="font-medium">

@@ -7,6 +7,7 @@ import logging
 from datetime import datetime
 from uuid import UUID
 import io
+import json
 
 from ..schemas.lawyer import (
     LawyerChatRequest, LawyerChatResponse,
@@ -76,14 +77,7 @@ async def chat_with_lawyer(
     lawyer = get_ai_lawyer()
     
     try:
-        # Save user message to history
-        async with pool.acquire() as conn:
-            await conn.execute("""
-                INSERT INTO ai_chat_history (user_id, assistant_type, role, content)
-                VALUES ($1, 'lawyer', 'user', $2)
-            """, current_user['id'], request.message)
-        
-        # Get response from AI Lawyer
+        # Get response from AI Lawyer (save messages AFTER to avoid duplicate in history)
         response_text, sources = await lawyer.chat(
             message=request.message,
             pool=pool,
@@ -92,9 +86,13 @@ async def chat_with_lawyer(
             include_history=request.include_history,
             use_rag=request.use_rag
         )
-        
-        # Save assistant response to history
+
+        # Save both user message and assistant response to history
         async with pool.acquire() as conn:
+            await conn.execute("""
+                INSERT INTO ai_chat_history (user_id, assistant_type, role, content)
+                VALUES ($1, 'lawyer', 'user', $2)
+            """, current_user['id'], request.message)
             await conn.execute("""
                 INSERT INTO ai_chat_history (user_id, assistant_type, role, content)
                 VALUES ($1, 'lawyer', 'assistant', $2)
@@ -229,8 +227,8 @@ async def generate_document(
                 INSERT INTO lawyer_documents (user_id, document_type, title, language, input_data, content)
                 VALUES ($1, $2, $3, $4, $5, $6)
                 RETURNING id
-            """, current_user['id'], request.document_type.value, title, 
-                request.language.value, request.data, content)
+            """, current_user['id'], request.document_type.value, title,
+                request.language.value, json.dumps(request.data, ensure_ascii=False, default=str), content)
         
         return GenerateDocumentResponse(
             id=str(doc_id),
