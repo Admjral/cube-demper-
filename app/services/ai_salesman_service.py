@@ -401,7 +401,7 @@ async def process_order_for_upsell(
 
         # 2. Получаем товары заказа
         items = await conn.fetch("""
-            SELECT oi.*, p.category, p.sku as product_sku
+            SELECT oi.*, p.category, p.kaspi_sku as product_sku
             FROM order_items oi
             LEFT JOIN products p ON oi.product_id = p.id
             WHERE oi.order_id = $1
@@ -423,7 +423,7 @@ async def process_order_for_upsell(
 
         # 4. Получаем каталог магазина для допродажи
         catalog = await conn.fetch("""
-            SELECT p.id, p.name, p.sku, p.price, p.category
+            SELECT p.id, p.name, p.kaspi_sku, p.price, p.category
             FROM products p
             WHERE p.store_id = $1 AND p.is_active = TRUE
             ORDER BY p.sales_count DESC NULLS LAST

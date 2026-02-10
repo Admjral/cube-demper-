@@ -64,6 +64,18 @@ def get_waha() -> WahaService:
     return get_waha_service()
 
 
+def normalize_waha_status(waha_status: str) -> str:
+    """Map WAHA-native status values to app-level status values."""
+    mapping = {
+        'WORKING': 'connected',
+        'SCAN_QR_CODE': 'qr_pending',
+        'FAILED': 'failed',
+        'STOPPED': 'disconnected',
+        'STARTING': 'connecting',
+    }
+    return mapping.get(waha_status, waha_status)
+
+
 # ==================== SESSION MANAGEMENT ====================
 
 @router.post("/session/create", response_model=WhatsAppSessionResponse, status_code=status.HTTP_201_CREATED)
@@ -255,7 +267,7 @@ async def get_qr_code(
             )
 
         # Если сессия уже авторизована, QR не нужен
-        if session['status'] == WahaSessionStatus.WORKING.value:
+        if normalize_waha_status(session['status']) == 'connected':
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Session already authenticated. QR code not needed."
@@ -365,8 +377,7 @@ async def send_message(
                 detail="No WhatsApp session found. Create one first."
             )
 
-        # Accept both our internal "connected" status and WAHA's "WORKING" status
-        if session['status'] not in ('connected', 'WORKING', WahaSessionStatus.WORKING.value):
+        if normalize_waha_status(session['status']) != 'connected':
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"WhatsApp session not ready. Current status: {session['status']}. Please scan QR code first."
@@ -1056,8 +1067,7 @@ async def _get_active_session(user_id: UUID, pool: asyncpg.Pool) -> str:
                 detail="No WhatsApp session found. Create one first."
             )
 
-        # Accept both our internal "connected" status and WAHA's "WORKING" status
-        if session['status'] not in ('connected', 'WORKING', WahaSessionStatus.WORKING.value):
+        if normalize_waha_status(session['status']) != 'connected':
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail=f"WhatsApp session not ready. Current status: {session['status']}. Please scan QR code first."
@@ -1132,7 +1142,7 @@ async def list_sessions(
                 user_id=str(s['user_id']),
                 session_name=s['session_name'] or 'default',
                 phone_number=s['phone_number'],
-                status=s['status'] or 'disconnected',
+                status=normalize_waha_status(s['status'] or 'disconnected'),
                 last_seen=s['last_seen'],
                 created_at=s['created_at'],
                 updated_at=s['updated_at'],
@@ -1285,7 +1295,7 @@ async def get_session_qr_by_id(
             # Check if session is already connected
             try:
                 status_info = await waha.get_session(session_name)
-                if status_info.get('status') == 'WORKING':
+                if normalize_waha_status(status_info.get('status', '')) == 'connected':
                     await conn.execute(
                         "UPDATE whatsapp_sessions SET status = 'connected', updated_at = NOW() WHERE id = $1",
                         session_uuid

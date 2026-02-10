@@ -123,6 +123,17 @@ async def authenticate_store(
         # Store in database (wrap encrypted string in JSON object)
         # Also store email/password separately for auto-reauthentication
         async with pool.acquire() as conn:
+            # Check if merchant_id already belongs to another user
+            existing_owner = await conn.fetchval(
+                "SELECT user_id FROM kaspi_stores WHERE merchant_id = $1",
+                merchant_id
+            )
+            if existing_owner and str(existing_owner) != current_user['id']:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail="Этот магазин уже подключён к другому аккаунту"
+                )
+
             # Try with new columns first, fallback to old schema
             try:
                 store = await conn.fetchrow(
