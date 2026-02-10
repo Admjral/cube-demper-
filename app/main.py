@@ -141,7 +141,7 @@ app.add_middleware(
     allow_origins=settings.cors_origins,
     allow_credentials=True,
     allow_methods=["GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS"],
-    allow_headers=["*"],  # Allow all headers for CORS preflight
+    allow_headers=["Content-Type", "Authorization", "Accept"],
     max_age=3600,  # Cache preflight requests for 1 hour
 )
 
