@@ -470,6 +470,7 @@ async def list_products(
                 price=p['price'],
                 min_profit=p['min_profit'],
                 bot_active=p['bot_active'],
+                pre_order_days=p.get('pre_order_days', 0) or 0,
                 last_check_time=p['last_check_time'],
                 availabilities=json.loads(p['availabilities']) if isinstance(p['availabilities'], str) else p['availabilities'],
                 created_at=p['created_at'],
@@ -559,6 +560,11 @@ async def update_product(
             updates.append(f"strategy_params = ${param_count}")
             params.append(json.dumps(update_data.strategy_params))
 
+        if update_data.pre_order_days is not None:
+            param_count += 1
+            updates.append(f"pre_order_days = ${param_count}")
+            params.append(update_data.pre_order_days)
+
         if not updates:
             raise HTTPException(
                 status_code=status.HTTP_400_BAD_REQUEST,
@@ -593,6 +599,7 @@ async def update_product(
             price=updated['price'],
             min_profit=updated['min_profit'],
             bot_active=updated['bot_active'],
+            pre_order_days=updated.get('pre_order_days', 0) or 0,
             last_check_time=updated['last_check_time'],
             availabilities=availabilities,
             created_at=updated['created_at'],
@@ -655,6 +662,7 @@ async def get_product_demping_details(
             price_step_override=details['price_step_override'],
             demping_strategy=details['demping_strategy'] or 'standard',
             strategy_params=strategy_params,
+            pre_order_days=details.get('pre_order_days', 0) or 0,
             store_price_step=details['store_price_step'],
             store_min_margin_percent=details['store_min_margin_percent'],
             store_work_hours_start=details['store_work_hours_start'],
@@ -1708,6 +1716,7 @@ async def update_product_price(
             price=updated['price'],
             min_profit=updated['min_profit'],
             bot_active=updated['bot_active'],
+            pre_order_days=updated.get('pre_order_days', 0) or 0,
             last_check_time=updated['last_check_time'],
             availabilities=updated['availabilities'],
             created_at=updated['created_at'],

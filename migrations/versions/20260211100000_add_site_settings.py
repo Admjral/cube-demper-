@@ -1,7 +1,7 @@
 """Add site_settings table for configurable referral commission percent
 
 Revision ID: 20260211100000
-Revises: 20260210120000
+Revises: 20260210160000
 Create Date: 2026-02-11
 
 """
@@ -10,7 +10,7 @@ import sqlalchemy as sa
 
 # revision identifiers
 revision = '20260211100000'
-down_revision = '20260210120000'
+down_revision = '20260210160000'
 branch_labels = None
 depends_on = None
 
