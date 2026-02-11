@@ -1,0 +1,47 @@
+ак Pricefeed получает телефоны клиентов
+Kaspi Open API (REST) — это отдельный API от MC GraphQL, и он отдаёт реальные немаскированные телефоны.
+
+Ключевые отличия:
+MC GraphQL	Kaspi Open API (REST)
+URL	mc.shop.kaspi.kz/mc/facade/graphql	kaspi.kz/shop/api/v2/orders
+Авторизация	Session cookies (Playwright login)	X-Auth-Token: token (API ключ)
+Поле телефона	customer.phoneNumber = МАСКА	customer.cellPhone = РЕАЛЬНЫЙ
+Формат	+0(000)-000-00-00	7750000000 (11 цифр)
+Доступность	Только buyerContactAlias для "Моя доставка"	Все типы заказов
+Что нужно сделать:
+Продавец генерирует API Token в Kaspi MC → Настройки → API
+Мы сохраняем его в kaspi_stores.api_key (поле уже есть в базе!)
+Запросы к REST API с заголовком X-Auth-Token: <token> вместо cookies
+Получаем customer.cellPhone — реальный номер
+Наш текущий баг:
+Код в api_parser.py:822 и orders_worker.py:223 пытается вызвать REST API с session cookies вместо API Token — поэтому получает 401.
+
+Хочешь, добавлю поддержку API Token авторизации и попросим у юзеров ввести их API ключ?
+
+Sources:
+
+Kaspi Open API Documentation
+Kaspi API Description
+Go implementation reference
+
+eIBxz0nEtYtBrZU/lH6KYJLVh21C7rtKFGNkd2hBAy8= вот токен нашего магаза
+
+Все data-запросы таймаутятся (HTTP 000), а validation-ошибки отвечают мгновенно (400). Это значит:
+
+Kaspi API geo-restricted — отдаёт данные только с казахстанских IP. Валидация (400 ошибки) работает до проверки IP, а data-запросы блокируются.
+
+Итог
+Мы подтвердили ключевое:
+
+Токен валидный — API принимает его (400 с правильными ошибками, не 401)
+Формат запроса — X-Auth-Token header + application/vnd.api+json
+Ограничения: max 14 дней, валидные статусы (APPROVED_BY_BANK, ACCEPTED_BY_MERCHANT, DELIVERY, DELIVERED и т.д.)
+Данные нужен KZ IP — с твоей машины или Railway (если не в KZ) данные не получить
+По документации Kaspi, REST API возвращает реальный customer.cellPhone (формат 7750000000). Именно так Pricefeed получает номера.
+
+Что нужно чтобы это заработало:
+Запросы к REST API делать через KZ прокси или из бэкенда с KZ IP
+Авторизация через X-Auth-Token, а не session cookies
+Поле api_key в kaspi_stores уже есть — нужно дать юзерам UI для его ввода
+
+Backend c kz API реализуем чуть позднее но функционал должен быть уже

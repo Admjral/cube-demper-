@@ -14,11 +14,18 @@ class KaspiStoreResponse(BaseModel):
     products_count: int
     last_sync: Optional[datetime]
     is_active: bool
+    api_key_set: bool = False
+    api_key_valid: bool = True
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class ApiTokenUpdate(BaseModel):
+    """Schema for updating store API token"""
+    api_token: str = Field(..., min_length=1, description="Kaspi API token from MC settings")
 
 
 class KaspiAuthRequest(BaseModel):
@@ -50,6 +57,7 @@ class ProductUpdateRequest(BaseModel):
     price_step_override: Optional[int] = Field(None, description="Price step override in tiyns")
     demping_strategy: Optional[str] = Field(None, pattern="^(standard|always_first|stay_top_n)$")
     strategy_params: Optional[dict] = None
+    pre_order_days: Optional[int] = Field(None, ge=0, le=30, description="Pre-order days (0=off, 1-30=on)")
 
 
 class BulkPriceUpdateRequest(BaseModel):
@@ -109,6 +117,7 @@ class ProductDempingDetails(BaseModel):
     price_step_override: Optional[int] = None
     demping_strategy: str = "standard"
     strategy_params: Optional[dict] = None
+    pre_order_days: int = 0
 
     # Global store settings (for display)
     store_price_step: int

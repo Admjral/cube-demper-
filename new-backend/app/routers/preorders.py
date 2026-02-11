@@ -12,14 +12,14 @@ from ..schemas.preorders import (
     PreorderListResponse,
 )
 from ..core.database import get_db_pool
-from ..dependencies import get_current_user, require_feature
+from ..dependencies import get_current_user
 
 router = APIRouter()
 
 
 @router.get("/", response_model=PreorderListResponse)
 async def list_preorders(
-    current_user: Annotated[dict, require_feature("preorder")],
+    current_user: Annotated[dict, Depends(get_current_user)],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
     page: int = 1,
     page_size: int = 50
@@ -84,7 +84,7 @@ async def list_preorders(
 @router.post("/", response_model=PreorderResponse, status_code=status.HTTP_201_CREATED)
 async def create_preorder(
     preorder_data: PreorderCreate,
-    current_user: Annotated[dict, require_feature("preorder")],
+    current_user: Annotated[dict, Depends(get_current_user)],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """Create a new preorder"""
@@ -140,7 +140,7 @@ async def create_preorder(
 async def update_preorder(
     preorder_id: str,
     update_data: PreorderUpdate,
-    current_user: Annotated[dict, require_feature("preorder")],
+    current_user: Annotated[dict, Depends(get_current_user)],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """Update a preorder"""
@@ -224,7 +224,7 @@ async def update_preorder(
 @router.delete("/{preorder_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_preorder(
     preorder_id: str,
-    current_user: Annotated[dict, require_feature("preorder")],
+    current_user: Annotated[dict, Depends(get_current_user)],
     pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
 ):
     """Delete a preorder"""

@@ -86,6 +86,7 @@ class Settings(BaseSettings):
     # Kaspi API
     kaspi_api_base_url: str = "https://kaspi.kz/shop/api"
     kaspi_auth_url: str = "https://idmc.shop.kaspi.kz"
+    kaspi_api_proxy: Optional[str] = None  # KZ proxy for geo-restricted REST API
 
     # WAHA Configuration (shared container from docker-compose)
     waha_url: str = "http://waha:3000"  # WAHA API URL inside Docker network

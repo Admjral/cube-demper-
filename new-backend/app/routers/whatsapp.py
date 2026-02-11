@@ -9,7 +9,7 @@ WhatsApp router - WAHA API integration for messaging
 - Шаблоны сообщений
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Response
+from fastapi import APIRouter, Depends, HTTPException, status, Response, BackgroundTasks
 from typing import Annotated, List, Optional
 from pydantic import BaseModel
 import asyncpg
@@ -17,6 +17,7 @@ import logging
 import base64
 from uuid import UUID
 from datetime import datetime
+import asyncio
 
 import json as json_module
 
@@ -1513,3 +1514,427 @@ async def update_whatsapp_settings(
             created_at=settings['created_at'],
             updated_at=settings['updated_at'],
         )
+
+
+# ==================== CUSTOMER CONTACTS ====================
+
+class CustomerContactResponse(BaseModel):
+    id: str
+    phone: str
+    name: Optional[str] = None
+    store_name: Optional[str] = None
+    orders_count: int = 1
+    first_order_code: Optional[str] = None
+    last_order_code: Optional[str] = None
+    is_blocked: bool = False
+    created_at: datetime
+    updated_at: datetime
+
+
+class ContactsListResponse(BaseModel):
+    contacts: List[CustomerContactResponse]
+    total: int
+    page: int
+    per_page: int
+
+
+@router.get("/contacts", response_model=ContactsListResponse)
+async def get_customer_contacts(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    store_id: Optional[str] = None,
+    search: Optional[str] = None,
+    page: int = 1,
+    per_page: int = 50,
+):
+    """Get customer contacts accumulated from orders."""
+    async with pool.acquire() as conn:
+        conditions = ["cc.user_id = $1", "cc.is_blocked = FALSE"]
+        params: list = [current_user['id']]
+        idx = 1
+
+        if store_id:
+            idx += 1
+            conditions.append(f"cc.store_id = ${idx}")
+            params.append(UUID(store_id))
+
+        if search:
+            idx += 1
+            conditions.append(f"(cc.phone LIKE ${idx} OR cc.name ILIKE ${idx})")
+            params.append(f"%{search}%")
+
+        where = " AND ".join(conditions)
+        total = await conn.fetchval(
+            f"SELECT COUNT(*) FROM customer_contacts cc WHERE {where}", *params
+        )
+
+        offset = (page - 1) * per_page
+        idx += 1
+        limit_idx = idx
+        idx += 1
+        offset_idx = idx
+
+        rows = await conn.fetch(f"""
+            SELECT cc.*, ks.name as store_name
+            FROM customer_contacts cc
+            LEFT JOIN kaspi_stores ks ON ks.id = cc.store_id
+            WHERE {where}
+            ORDER BY cc.orders_count DESC, cc.updated_at DESC
+            LIMIT ${limit_idx} OFFSET ${offset_idx}
+        """, *params, per_page, offset)
+
+        return ContactsListResponse(
+            contacts=[
+                CustomerContactResponse(
+                    id=str(r['id']),
+                    phone=r['phone'],
+                    name=r['name'],
+                    store_name=r['store_name'],
+                    orders_count=r['orders_count'] or 1,
+                    first_order_code=r['first_order_code'],
+                    last_order_code=r['last_order_code'],
+                    is_blocked=r['is_blocked'] or False,
+                    created_at=r['created_at'],
+                    updated_at=r['updated_at'],
+                )
+                for r in rows
+            ],
+            total=total or 0,
+            page=page,
+            per_page=per_page,
+        )
+
+
+@router.patch("/contacts/{contact_id}/block")
+async def block_contact(
+    contact_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """Block a contact (exclude from broadcasts)."""
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE customer_contacts SET is_blocked = TRUE, updated_at = NOW()
+            WHERE id = $1 AND user_id = $2
+        """, UUID(contact_id), current_user['id'])
+        if result == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="Contact not found")
+    return {"success": True}
+
+
+@router.patch("/contacts/{contact_id}/unblock")
+async def unblock_contact(
+    contact_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """Unblock a contact."""
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE customer_contacts SET is_blocked = FALSE, updated_at = NOW()
+            WHERE id = $1 AND user_id = $2
+        """, UUID(contact_id), current_user['id'])
+        if result == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="Contact not found")
+    return {"success": True}
+
+
+# ==================== BROADCAST CAMPAIGNS ====================
+
+class BroadcastCampaignCreate(BaseModel):
+    name: str
+    message_text: str
+    store_id: Optional[str] = None
+    template_id: Optional[str] = None
+    filter_min_orders: int = 0
+    filter_store_id: Optional[str] = None
+    scheduled_at: Optional[datetime] = None
+
+
+class BroadcastCampaignResponse(BaseModel):
+    id: str
+    name: str
+    message_text: str
+    status: str
+    scheduled_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    total_recipients: int = 0
+    sent_count: int = 0
+    failed_count: int = 0
+    filter_min_orders: int = 0
+    created_at: datetime
+
+
+@router.get("/broadcasts", response_model=List[BroadcastCampaignResponse])
+async def list_broadcasts(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """List broadcast campaigns."""
+    async with pool.acquire() as conn:
+        campaigns = await conn.fetch("""
+            SELECT * FROM broadcast_campaigns
+            WHERE user_id = $1
+            ORDER BY created_at DESC
+            LIMIT 50
+        """, current_user['id'])
+
+        return [
+            BroadcastCampaignResponse(
+                id=str(c['id']),
+                name=c['name'],
+                message_text=c['message_text'],
+                status=c['status'],
+                scheduled_at=c['scheduled_at'],
+                started_at=c['started_at'],
+                completed_at=c['completed_at'],
+                total_recipients=c['total_recipients'] or 0,
+                sent_count=c['sent_count'] or 0,
+                failed_count=c['failed_count'] or 0,
+                filter_min_orders=c['filter_min_orders'] or 0,
+                created_at=c['created_at'],
+            )
+            for c in campaigns
+        ]
+
+
+@router.post("/broadcasts", response_model=BroadcastCampaignResponse, status_code=201)
+async def create_broadcast(
+    data: BroadcastCampaignCreate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """Create a broadcast campaign (status=draft, not yet started)."""
+    async with pool.acquire() as conn:
+        conditions = ["cc.user_id = $1", "cc.is_blocked = FALSE"]
+        params: list = [current_user['id']]
+        idx = 1
+
+        if data.filter_min_orders > 0:
+            idx += 1
+            conditions.append(f"cc.orders_count >= ${idx}")
+            params.append(data.filter_min_orders)
+
+        if data.filter_store_id:
+            idx += 1
+            conditions.append(f"cc.store_id = ${idx}")
+            params.append(UUID(data.filter_store_id))
+
+        where = " AND ".join(conditions)
+        total = await conn.fetchval(
+            f"SELECT COUNT(*) FROM customer_contacts cc WHERE {where}", *params
+        )
+
+        campaign = await conn.fetchrow("""
+            INSERT INTO broadcast_campaigns (
+                user_id, store_id, template_id, name, message_text,
+                status, scheduled_at, total_recipients, filter_min_orders, filter_store_id
+            )
+            VALUES ($1, $2, $3, $4, $5, 'draft', $6, $7, $8, $9)
+            RETURNING *
+        """,
+            current_user['id'],
+            UUID(data.store_id) if data.store_id else None,
+            UUID(data.template_id) if data.template_id else None,
+            data.name,
+            data.message_text,
+            data.scheduled_at,
+            total or 0,
+            data.filter_min_orders,
+            UUID(data.filter_store_id) if data.filter_store_id else None,
+        )
+
+        return BroadcastCampaignResponse(
+            id=str(campaign['id']),
+            name=campaign['name'],
+            message_text=campaign['message_text'],
+            status=campaign['status'],
+            scheduled_at=campaign['scheduled_at'],
+            started_at=campaign['started_at'],
+            completed_at=campaign['completed_at'],
+            total_recipients=campaign['total_recipients'] or 0,
+            sent_count=campaign['sent_count'] or 0,
+            failed_count=campaign['failed_count'] or 0,
+            filter_min_orders=campaign['filter_min_orders'] or 0,
+            created_at=campaign['created_at'],
+        )
+
+
+@router.post("/broadcasts/{campaign_id}/start")
+async def start_broadcast(
+    campaign_id: str,
+    background_tasks: BackgroundTasks,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+    waha: Annotated[WahaService, Depends(get_waha)],
+):
+    """Start a broadcast: select recipients, send in background."""
+    async with pool.acquire() as conn:
+        campaign = await conn.fetchrow("""
+            SELECT * FROM broadcast_campaigns
+            WHERE id = $1 AND user_id = $2
+        """, UUID(campaign_id), current_user['id'])
+
+        if not campaign:
+            raise HTTPException(status_code=404, detail="Campaign not found")
+
+        if campaign['status'] not in ('draft', 'failed'):
+            raise HTTPException(status_code=400, detail=f"Cannot start campaign in '{campaign['status']}' status")
+
+        session = await conn.fetchrow("""
+            SELECT session_name, status FROM whatsapp_sessions
+            WHERE user_id = $1 AND status IN ('connected', 'WORKING')
+            LIMIT 1
+        """, current_user['id'])
+
+        if not session:
+            raise HTTPException(status_code=400, detail="No active WhatsApp session")
+
+        conditions = ["cc.user_id = $1", "cc.is_blocked = FALSE"]
+        params: list = [current_user['id']]
+        idx = 1
+
+        if campaign['filter_min_orders'] and campaign['filter_min_orders'] > 0:
+            idx += 1
+            conditions.append(f"cc.orders_count >= ${idx}")
+            params.append(campaign['filter_min_orders'])
+
+        if campaign['filter_store_id']:
+            idx += 1
+            conditions.append(f"cc.store_id = ${idx}")
+            params.append(campaign['filter_store_id'])
+
+        where = " AND ".join(conditions)
+        contacts = await conn.fetch(
+            f"SELECT id, phone FROM customer_contacts cc WHERE {where}", *params
+        )
+
+        if not contacts:
+            raise HTTPException(status_code=400, detail="No eligible recipients found")
+
+        for contact in contacts:
+            await conn.execute("""
+                INSERT INTO broadcast_recipients (campaign_id, contact_id, phone, status)
+                VALUES ($1, $2, $3, 'pending')
+                ON CONFLICT DO NOTHING
+            """, UUID(campaign_id), contact['id'], contact['phone'])
+
+        await conn.execute("""
+            UPDATE broadcast_campaigns
+            SET status = 'sending', started_at = NOW(), total_recipients = $2, updated_at = NOW()
+            WHERE id = $1
+        """, UUID(campaign_id), len(contacts))
+
+    background_tasks.add_task(
+        _send_broadcast_background,
+        campaign_id=campaign_id,
+        session_name=session['session_name'],
+        message_text=campaign['message_text'],
+        pool=pool,
+        waha=waha,
+    )
+
+    return {
+        "success": True,
+        "message": f"Broadcast started with {len(contacts)} recipients",
+        "total_recipients": len(contacts),
+    }
+
+
+@router.post("/broadcasts/{campaign_id}/cancel")
+async def cancel_broadcast(
+    campaign_id: str,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """Cancel a broadcast (pending messages will be skipped)."""
+    async with pool.acquire() as conn:
+        result = await conn.execute("""
+            UPDATE broadcast_campaigns
+            SET status = 'cancelled', completed_at = NOW(), updated_at = NOW()
+            WHERE id = $1 AND user_id = $2 AND status IN ('draft', 'sending')
+        """, UUID(campaign_id), current_user['id'])
+        if result == "UPDATE 0":
+            raise HTTPException(status_code=404, detail="Campaign not found or cannot cancel")
+    return {"success": True}
+
+
+async def _send_broadcast_background(
+    campaign_id: str,
+    session_name: str,
+    message_text: str,
+    pool: asyncpg.Pool,
+    waha: WahaService,
+):
+    """Background task: send messages to all broadcast recipients (15-30s anti-spam delay)."""
+    import random
+
+    sent = 0
+    failed = 0
+
+    try:
+        async with pool.acquire() as conn:
+            recipients = await conn.fetch("""
+                SELECT id, phone FROM broadcast_recipients
+                WHERE campaign_id = $1 AND status = 'pending'
+                ORDER BY id
+            """, UUID(campaign_id))
+
+            for recipient in recipients:
+                campaign_status = await conn.fetchval(
+                    "SELECT status FROM broadcast_campaigns WHERE id = $1",
+                    UUID(campaign_id)
+                )
+                if campaign_status == 'cancelled':
+                    logger.info(f"Broadcast {campaign_id} cancelled, stopping")
+                    break
+
+                try:
+                    await waha.send_text(
+                        phone=recipient['phone'],
+                        text=message_text,
+                        session=session_name,
+                    )
+                    await conn.execute("""
+                        UPDATE broadcast_recipients
+                        SET status = 'sent', sent_at = NOW()
+                        WHERE id = $1
+                    """, recipient['id'])
+                    sent += 1
+                except Exception as e:
+                    await conn.execute("""
+                        UPDATE broadcast_recipients
+                        SET status = 'failed', error_message = $2
+                        WHERE id = $1
+                    """, recipient['id'], str(e)[:500])
+                    failed += 1
+
+                await conn.execute("""
+                    UPDATE broadcast_campaigns
+                    SET sent_count = $2, failed_count = $3, updated_at = NOW()
+                    WHERE id = $1
+                """, UUID(campaign_id), sent, failed)
+
+                await asyncio.sleep(random.uniform(15, 30))
+
+            await conn.execute("""
+                UPDATE broadcast_campaigns
+                SET status = 'completed', completed_at = NOW(),
+                    sent_count = $2, failed_count = $3, updated_at = NOW()
+                WHERE id = $1 AND status = 'sending'
+            """, UUID(campaign_id), sent, failed)
+
+    except Exception as e:
+        logger.error(f"Broadcast {campaign_id} error: {e}")
+        try:
+            async with pool.acquire() as conn:
+                await conn.execute("""
+                    UPDATE broadcast_campaigns
+                    SET status = 'failed', sent_count = $2, failed_count = $3, updated_at = NOW()
+                    WHERE id = $1
+                """, UUID(campaign_id), sent, failed)
+        except Exception:
+            pass
+
+    logger.info(f"Broadcast {campaign_id} finished: {sent} sent, {failed} failed")

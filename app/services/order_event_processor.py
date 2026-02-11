@@ -22,6 +22,7 @@ import asyncpg
 from ..config import settings
 from ..core.database import get_db_pool
 from .kaspi_mc_service import get_kaspi_mc_service, KaspiMCError
+from .kaspi_orders_api import get_kaspi_orders_api, KaspiTokenInvalidError
 from .waha_service import get_waha_service, WahaError
 
 logger = logging.getLogger(__name__)
@@ -131,19 +132,51 @@ class OrderEventProcessor:
                 return {"status": "no_template"}
 
             # 3. Получаем данные заказа и телефон покупателя
-            try:
-                order_data = await self._kaspi_mc.get_order_customer_phone(
-                    user_id=user_id,
-                    store_id=store_id,
-                    order_code=order_code,
-                    pool=pool,
-                )
-            except KaspiMCError as e:
-                logger.error(f"Failed to get order data: {e}")
-                return {"status": "error", "error": str(e)}
+            # Стратегия: REST API (X-Auth-Token) → fallback MC GraphQL
+            order_data = None
+
+            # 3a. Пробуем REST API если есть api_key
+            store_row = await conn.fetchrow(
+                "SELECT api_key, api_key_valid FROM kaspi_stores WHERE id = $1",
+                UUID(store_id)
+            )
+            api_key = store_row.get('api_key') if store_row else None
+            api_key_valid = store_row.get('api_key_valid', True) if store_row else True
+
+            if api_key and api_key_valid:
+                try:
+                    orders_api = get_kaspi_orders_api()
+                    order_data = await orders_api.get_customer_phone(
+                        api_token=api_key,
+                        order_code=order_code,
+                        pool=pool,
+                    )
+                    logger.info(f"Got phone via REST API for order {order_code}")
+                except KaspiTokenInvalidError:
+                    logger.warning(f"API token invalid for store {store_id}, marking as invalid")
+                    await conn.execute(
+                        "UPDATE kaspi_stores SET api_key_valid = FALSE WHERE id = $1",
+                        UUID(store_id)
+                    )
+                    order_data = None
+                except Exception as e:
+                    logger.warning(f"REST API failed for order {order_code}: {e}")
+                    order_data = None
+
+            # 3b. Fallback: MC GraphQL (masked since Feb 5 2026, but kept as backup)
+            if not order_data or not order_data.get('phone'):
+                try:
+                    order_data = await self._kaspi_mc.get_order_customer_phone(
+                        user_id=user_id,
+                        store_id=store_id,
+                        order_code=order_code,
+                        pool=pool,
+                    )
+                except KaspiMCError as e:
+                    logger.error(f"MC GraphQL fallback also failed: {e}")
 
             if not order_data or not order_data.get('phone'):
-                logger.warning(f"No phone number for order {order_code}")
+                logger.warning(f"No phone number for order {order_code} (both REST API and MC GraphQL failed)")
                 return {"status": "no_phone"}
 
             # 4. Получаем данные магазина

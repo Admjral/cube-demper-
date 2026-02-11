@@ -14,11 +14,18 @@ class KaspiStoreResponse(BaseModel):
     products_count: int
     last_sync: Optional[datetime]
     is_active: bool
+    api_key_set: bool = False
+    api_key_valid: bool = True
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class ApiTokenUpdate(BaseModel):
+    """Schema for updating store API token"""
+    api_token: str = Field(..., min_length=1, description="Kaspi API token from MC settings")
 
 
 class KaspiAuthRequest(BaseModel):

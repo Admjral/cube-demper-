@@ -1,46 +1,24 @@
 "use client"
 
-import { useState } from "react"
 import { useStore } from "@/store/use-store"
 import { useT } from "@/lib/i18n"
 import { SubscriptionGate } from "@/components/shared/subscription-gate"
+import { useProducts } from "@/hooks/api/use-products"
 import { Card, CardContent } from "@/components/ui/card"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Textarea } from "@/components/ui/textarea"
-import {
-  Dialog,
-  DialogContent,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog"
+import { Skeleton } from "@/components/ui/skeleton"
 import {
   Package,
-  Plus,
   Calendar,
-  Clock,
-  Search,
-  MoreHorizontal,
   Store,
-  Construction,
+  Bot,
 } from "lucide-react"
 import Link from "next/link"
 import { FeatureGate } from "@/components/shared/feature-gate"
-
-interface PreOrder {
-  id: string
-  product: string
-  customer: string
-  phone: string
-  quantity: number
-  deposit: number
-  expectedDate: string
-  status: "pending" | "confirmed" | "ready" | "completed" | "cancelled"
-  notes: string
-}
+import { formatPrice } from "@/lib/utils"
+import { ProductDempingDialog } from "@/components/shared/product-demping-dialog"
+import { useState } from "react"
 
 function NoStoreSelected() {
   const t = useT()
@@ -64,80 +42,53 @@ function NoStoreSelected() {
   )
 }
 
-function ComingSoon() {
+function NoActivePreOrders() {
   const t = useT()
   return (
     <Card className="glass-card">
       <CardContent className="p-8 text-center">
-        <Construction className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+        <Package className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
         <h3 className="text-lg font-semibold mb-2">
-          {t("preOrders.comingSoon")}
+          {t("preOrders.noActive")}
         </h3>
-        <p className="text-muted-foreground">
-          {t("preOrders.comingSoonDesc")}
+        <p className="text-muted-foreground mb-4">
+          {t("preOrders.noActiveDesc")}
         </p>
+        <Link href="/dashboard/price-bot">
+          <Button>
+            <Bot className="h-4 w-4 mr-2" />
+            {t("preOrders.goToDemping")}
+          </Button>
+        </Link>
       </CardContent>
     </Card>
   )
 }
 
 export default function PreOrdersPage() {
-  const { locale, selectedStore } = useStore()
+  const { selectedStore } = useStore()
   const t = useT()
-  const [searchQuery, setSearchQuery] = useState("")
-  const [dialogOpen, setDialogOpen] = useState(false)
+  const [selectedProductId, setSelectedProductId] = useState<string | null>(null)
 
-  // Pre-orders will be loaded from API when backend is ready
-  const preorders: PreOrder[] = []
+  const {
+    data: products,
+    isLoading,
+  } = useProducts(selectedStore?.id)
 
-  const getStatusBadge = (status: string) => {
-    const variants: Record<string, { key: string; variant: "default" | "secondary" | "outline" }> = {
-      pending: { key: "preOrders.pending", variant: "secondary" },
-      confirmed: { key: "preOrders.confirmed", variant: "default" },
-      ready: { key: "preOrders.ready", variant: "outline" },
-      completed: { key: "preOrders.completed", variant: "outline" },
-      cancelled: { key: "preOrders.cancelled", variant: "secondary" },
-    }
-    const { key, variant } = variants[status] || variants.pending
-    return (
-      <Badge variant={variant}>
-        {t(key)}
-      </Badge>
-    )
-  }
-
-  const formatPrice = (price: number) => {
-    return new Intl.NumberFormat("ru-RU").format(price) + " ₸"
-  }
-
-  const filteredPreorders = preorders.filter(
-    (p) =>
-      p.product.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      p.customer.toLowerCase().includes(searchQuery.toLowerCase())
-  )
-
-  const pendingCount = preorders.filter((p) => p.status === "pending").length
-  const readyCount = preorders.filter((p) => p.status === "ready").length
+  // Filter only products with active pre-orders
+  const preOrderProducts = products?.filter((p) => p.pre_order_days > 0) || []
 
   return (
     <SubscriptionGate>
     <div className="space-y-6">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-semibold">
-            {t("preOrders.title")}
-          </h1>
-          <p className="text-muted-foreground">
-            {t("preOrders.subtitle")}
-          </p>
-        </div>
-        {selectedStore && (
-          <Button className="touch-target" disabled>
-            <Plus className="h-4 w-4 mr-2" />
-            {t("preOrders.newPreOrder")}
-          </Button>
-        )}
+      <div>
+        <h1 className="text-2xl font-semibold">
+          {t("preOrders.title")}
+        </h1>
+        <p className="text-muted-foreground">
+          {t("preOrders.activePreOrdersDesc")}
+        </p>
       </div>
 
       {/* No store selected */}
@@ -146,121 +97,101 @@ export default function PreOrdersPage() {
       {/* Feature gate for preorder access */}
       {selectedStore && (
         <FeatureGate feature="preorder">
-          {/* Coming soon message when store is selected and has access */}
-          <ComingSoon />
-        </FeatureGate>
-      )}
+          {/* Loading */}
+          {isLoading && (
+            <div className="space-y-4">
+              {[1, 2, 3].map((i) => (
+                <Card key={i} className="glass-card">
+                  <CardContent className="p-4">
+                    <Skeleton className="h-16" />
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
 
-      {/* Stats and list - will be shown when backend is ready and preorders exist */}
-      {selectedStore && preorders.length > 0 && (
-        <>
-          <div className="grid gap-4 sm:grid-cols-3">
+          {/* Stats */}
+          {!isLoading && preOrderProducts.length > 0 && (
             <Card className="glass-card">
               <CardContent className="p-4">
                 <div className="flex items-center justify-between">
                   <p className="text-sm text-muted-foreground">
-                    {t("preOrders.total")}
+                    {t("preOrders.activePreOrders")}
                   </p>
-                  <Package className="h-4 w-4 text-muted-foreground" />
+                  <Package className="h-4 w-4 text-orange-500" />
                 </div>
-                <p className="text-2xl font-semibold mt-2">{preorders.length}</p>
+                <p className="text-2xl font-semibold mt-2">{preOrderProducts.length}</p>
               </CardContent>
             </Card>
-            <Card className="glass-card">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">
-                    {t("preOrders.pendingCount")}
-                  </p>
-                  <Clock className="h-4 w-4 text-yellow-500" />
-                </div>
-                <p className="text-2xl font-semibold mt-2">{pendingCount}</p>
-              </CardContent>
-            </Card>
-            <Card className="glass-card">
-              <CardContent className="p-4">
-                <div className="flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">
-                    {t("preOrders.readyCount")}
-                  </p>
-                  <Calendar className="h-4 w-4 text-green-500" />
-                </div>
-                <p className="text-2xl font-semibold mt-2">{readyCount}</p>
-              </CardContent>
-            </Card>
-          </div>
+          )}
 
-          <Card className="glass-card">
-            <CardContent className="p-4">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder={t("preOrders.searchPlaceholder")}
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="pl-10"
-                />
-              </div>
-            </CardContent>
-          </Card>
+          {/* No active pre-orders */}
+          {!isLoading && preOrderProducts.length === 0 && (
+            <NoActivePreOrders />
+          )}
 
-          <div className="space-y-4">
-            {filteredPreorders.map((preorder) => (
-              <Card key={preorder.id} className="glass-card">
-                <CardContent className="p-4">
-                  <div className="flex flex-col sm:flex-row sm:items-start justify-between gap-4">
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <h3 className="font-semibold">{preorder.product}</h3>
-                          <p className="text-sm text-muted-foreground">
-                            {preorder.customer} • {preorder.phone}
-                          </p>
-                        </div>
-                        {getStatusBadge(preorder.status)}
+          {/* Products with active pre-orders */}
+          {!isLoading && preOrderProducts.length > 0 && (
+            <div className="space-y-3">
+              {preOrderProducts.map((product) => (
+                <Card
+                  key={product.id}
+                  className="glass-card cursor-pointer hover:border-orange-500/50 transition-colors"
+                  onClick={() => setSelectedProductId(product.id)}
+                >
+                  <CardContent className="p-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex-1 min-w-0">
+                        <h3 className="font-medium truncate">{product.name}</h3>
+                        <p className="text-sm text-muted-foreground">{product.kaspi_sku}</p>
                       </div>
-                      <div className="mt-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                        <div>
-                          <p className="text-xs text-muted-foreground">
-                            {t("preOrders.quantity")}
-                          </p>
-                          <p className="font-medium">{preorder.quantity} шт</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">
-                            {t("preOrders.deposit")}
-                          </p>
-                          <p className="font-medium">{formatPrice(preorder.deposit)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">
-                            {t("preOrders.expectedDate")}
-                          </p>
-                          <p className="font-medium">
-                            {new Date(preorder.expectedDate).toLocaleDateString(
-                              locale === "ru" ? "ru-RU" : "en-US"
-                            )}
-                          </p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">
-                            {t("preOrders.notes")}
-                          </p>
-                          <p className="font-medium truncate">{preorder.notes}</p>
-                        </div>
+                      <Badge className="bg-orange-500/20 text-orange-600 hover:bg-orange-500/30 shrink-0">
+                        {product.pre_order_days} {t("preOrder.daysUnit")}
+                      </Badge>
+                    </div>
+                    <div className="mt-3 grid grid-cols-2 sm:grid-cols-3 gap-4">
+                      <div>
+                        <p className="text-xs text-muted-foreground">
+                          {t("priceBot.currentPrice")}
+                        </p>
+                        <p className="font-semibold">{formatPrice(product.price)}</p>
+                      </div>
+                      <div>
+                        <p className="text-xs text-muted-foreground">
+                          {t("preOrder.deliveryBy")}
+                        </p>
+                        <p className="font-medium flex items-center gap-1">
+                          <Calendar className="h-3.5 w-3.5" />
+                          {new Date(Date.now() + product.pre_order_days * 86400000).toLocaleDateString("ru-RU", {
+                            day: "numeric",
+                            month: "short",
+                          })}
+                        </p>
+                      </div>
+                      <div className="hidden sm:block">
+                        <p className="text-xs text-muted-foreground">
+                          {t("priceBot.demping")}
+                        </p>
+                        <Badge variant={product.bot_active ? "default" : "secondary"} className="mt-1">
+                          {product.bot_active ? t("priceBot.dempingOn") : t("priceBot.dempingOff")}
+                        </Badge>
                       </div>
                     </div>
-                    <Button variant="ghost" size="icon" className="touch-target shrink-0">
-                      <MoreHorizontal className="h-5 w-5" />
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
-          </div>
-        </>
+                  </CardContent>
+                </Card>
+              ))}
+            </div>
+          )}
+        </FeatureGate>
       )}
     </div>
+
+    {/* Product demping dialog (reuse from price-bot) */}
+    <ProductDempingDialog
+      productId={selectedProductId}
+      open={!!selectedProductId}
+      onOpenChange={(open) => !open && setSelectedProductId(null)}
+    />
     </SubscriptionGate>
   )
 }

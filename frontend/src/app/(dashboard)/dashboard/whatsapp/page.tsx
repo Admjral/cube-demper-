@@ -9,7 +9,6 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Label } from "@/components/ui/label"
 import { Badge } from "@/components/ui/badge"
-import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Textarea } from "@/components/ui/textarea"
@@ -25,107 +24,41 @@ import {
   MessageSquare,
   Wifi,
   WifiOff,
-  Clock,
-  FileText,
-  Settings2,
   Plus,
-  Edit,
   Trash2,
   Loader2,
   QrCode,
-  Bot,
-  BarChart3,
   Send,
-  History,
-  CheckCircle,
-  XCircle,
-  Eye,
-  AlertCircle,
-  TrendingUp,
-  ShoppingBag,
   Phone,
+  Users,
+  Megaphone,
+  Ban,
+  Play,
+  Search,
+  XCircle,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
   useWhatsAppSessions,
-  useWhatsAppTemplates,
-  useWhatsAppSettings,
   useCreateSession,
   useDeleteSession,
   useSessionQRCode,
   usePairByPhone,
-  useCreateTemplate,
-  useUpdateTemplate,
-  useDeleteTemplate,
-  useUpdateWhatsAppSettings,
   useSendWhatsAppMessage,
-  useWhatsAppMessages,
-  useWhatsAppStats,
-  useAISalesmanSettings,
-  useUpdateAISalesmanSettings,
-  useAISalesmanHistory,
-  useAISalesmanStats,
-  useOrdersPollingStatus,
-  useToggleOrdersPolling,
-  WhatsAppSession,
-  WhatsAppTemplate,
-  MessageHistoryFilters,
+  useCustomerContacts,
+  useBlockContact,
+  useUnblockContact,
+  useBroadcasts,
+  useCreateBroadcast,
+  useStartBroadcast,
+  useCancelBroadcast,
 } from "@/hooks/api/use-whatsapp"
 import { useStores } from "@/hooks/api/use-stores"
-import { FeatureGate } from "@/components/shared/feature-gate"
-import { TemplatePicker } from "@/components/whatsapp/template-picker"
-import { TemplateEditor } from "@/components/whatsapp/template-editor"
-import { PRESET_TEMPLATES, type PresetTemplate } from "@/components/whatsapp/template-constants"
-
-// Orders Polling Toggle Component
-function OrdersPollingToggle({
-  storeId,
-  storeName,
-  onToggle,
-}: {
-  storeId: string
-  storeName: string
-  onToggle: (enabled: boolean) => void
-}) {
-  const t = useT()
-  const { locale } = useStore()
-  const { data: pollingStatus, isLoading } = useOrdersPollingStatus(storeId)
-
-  if (isLoading) {
-    return (
-      <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30">
-        <span className="text-sm font-medium">{storeName}</span>
-        <Loader2 className="h-4 w-4 animate-spin" />
-      </div>
-    )
-  }
-
-  const isEnabled = pollingStatus?.orders_polling_enabled || false
-  const lastSync = pollingStatus?.last_orders_sync
-
-  return (
-    <div className="flex items-center justify-between p-3 rounded-lg bg-muted/30">
-      <div className="flex-1">
-        <span className="text-sm font-medium">{storeName}</span>
-        {lastSync && (
-          <p className="text-xs text-muted-foreground">
-            {t("wa.lastSync")}{" "}
-            {new Date(lastSync).toLocaleString(locale === "ru" ? "ru-RU" : "kk-KZ")}
-          </p>
-        )}
-      </div>
-      <Switch
-        checked={isEnabled}
-        onCheckedChange={onToggle}
-      />
-    </div>
-  )
-}
 
 export default function WhatsAppPage() {
   const { locale } = useStore()
   const t = useT()
-  const [activeTab, setActiveTab] = useState("sessions")
+  const [activeTab, setActiveTab] = useState("broadcasts")
 
   // Session state
   const [newSessionName, setNewSessionName] = useState("")
@@ -137,64 +70,21 @@ export default function WhatsAppPage() {
   const [pairingPhone, setPairingPhone] = useState("")
   const [pairingCode, setPairingCode] = useState<string | null>(null)
 
-  // Template state
-  const [templateFlowStep, setTemplateFlowStep] = useState<"closed" | "picker" | "editor">("closed")
-  const [editingTemplate, setEditingTemplate] = useState<WhatsAppTemplate | null>(null)
-  const [templateForm, setTemplateForm] = useState({
-    name: "",
-    name_en: "",
-    message: "",
-    variables: [] as string[],
-    trigger_event: "" as string,
-  })
-
-  // Order event types for templates
-  const orderEventTypes = [
-    { value: "order_approved", label: t("wa.orderPaid") },
-    { value: "order_accepted_by_merchant", label: t("wa.orderAccepted") },
-    { value: "order_shipped", label: t("wa.orderShipped") },
-    { value: "order_delivered", label: t("wa.orderDelivered") },
-    { value: "order_completed", label: t("wa.orderCompleted") },
-    { value: "review_request", label: t("wa.reviewRequest") },
-  ]
-
-  // Message filters
-  const [messageFilters, setMessageFilters] = useState<MessageHistoryFilters>({
-    page: 1,
-    per_page: 20,
-  })
-
   // Manual send state
   const [manualSendPhone, setManualSendPhone] = useState("")
   const [manualSendMessage, setManualSendMessage] = useState("")
 
   // API hooks
   const { data: sessions, isLoading: sessionsLoading } = useWhatsAppSessions()
-  const { data: templates, isLoading: templatesLoading } = useWhatsAppTemplates()
-  const { data: settings, isLoading: settingsLoading } = useWhatsAppSettings()
   const { data: qrData, isLoading: qrLoading } = useSessionQRCode(
     selectedSessionId || "",
     showQRDialog && !!selectedSessionId
   )
-  const { data: messagesData, isLoading: messagesLoading } = useWhatsAppMessages(messageFilters)
-  const { data: waStats, isLoading: statsLoading } = useWhatsAppStats(7)
-  const { data: salesmanSettings, isLoading: salesmanSettingsLoading } = useAISalesmanSettings()
-  const { data: salesmanHistory, isLoading: salesmanHistoryLoading } = useAISalesmanHistory(50)
-  const { data: salesmanStats, isLoading: salesmanStatsLoading } = useAISalesmanStats(7)
 
   const createSession = useCreateSession()
   const deleteSession = useDeleteSession()
   const pairByPhone = usePairByPhone()
-  const createTemplate = useCreateTemplate()
-  const updateTemplate = useUpdateTemplate()
-  const deleteTemplateM = useDeleteTemplate()
-  const updateSettings = useUpdateWhatsAppSettings()
   const sendMessage = useSendWhatsAppMessage()
-  const updateSalesmanSettings = useUpdateAISalesmanSettings()
-
-  // Kaspi stores for orders polling
-  const { data: kaspiStores } = useStores()
-  const toggleOrdersPolling = useToggleOrdersPolling()
 
   // Get active session
   const activeSession = sessions?.find((s) => s.status === "connected")
@@ -227,93 +117,6 @@ export default function WhatsAppPage() {
     }
   }
 
-  // Template handlers
-  const handleSaveTemplate = async () => {
-    if (!templateForm.name || !templateForm.message) {
-      toast.error(t("wa.fillNameAndText"))
-      return
-    }
-    try {
-      if (editingTemplate) {
-        await updateTemplate.mutateAsync({
-          id: editingTemplate.id,
-          name: templateForm.name,
-          name_en: templateForm.name_en,
-          message: templateForm.message,
-          variables: templateForm.variables,
-          trigger_event: templateForm.trigger_event || undefined,
-        })
-        toast.success(t("wa.templateUpdated"))
-      } else {
-        await createTemplate.mutateAsync({
-          name: templateForm.name,
-          name_en: templateForm.name_en,
-          message: templateForm.message,
-          variables: templateForm.variables,
-          trigger_event: templateForm.trigger_event || undefined,
-        })
-        toast.success(t("wa.templateCreated"))
-      }
-      setTemplateFlowStep("closed")
-      setEditingTemplate(null)
-      setTemplateForm({ name: "", name_en: "", message: "", variables: [], trigger_event: "" })
-    } catch {
-      toast.error(t("wa.saveError"))
-    }
-  }
-
-  const handleDeleteTemplate = async (templateId: string) => {
-    if (!confirm(t("wa.deleteTemplate"))) return
-    try {
-      await deleteTemplateM.mutateAsync(templateId)
-      toast.success(t("wa.templateDeleted"))
-    } catch {
-      toast.error(t("wa.deleteError"))
-    }
-  }
-
-  const handleToggleTemplate = async (template: WhatsAppTemplate) => {
-    try {
-      await updateTemplate.mutateAsync({
-        id: template.id,
-        is_active: !template.is_active,
-      })
-    } catch {
-      toast.error(t("wa.updateError"))
-    }
-  }
-
-  const openEditTemplate = (template: WhatsAppTemplate) => {
-    setEditingTemplate(template)
-    setTemplateForm({
-      name: template.name,
-      name_en: template.name_en || "",
-      message: template.message,
-      variables: template.variables,
-      trigger_event: template.trigger_event || "",
-    })
-    setTemplateFlowStep("editor")
-  }
-
-  // Handle preset selection from picker
-  const handlePresetSelect = (preset: PresetTemplate) => {
-    setEditingTemplate(null)
-    setTemplateForm({
-      name: locale === "ru" ? preset.nameRu : preset.nameEn,
-      name_en: preset.nameEn,
-      message: locale === "ru" ? preset.messageRu : preset.messageEn,
-      variables: [],
-      trigger_event: preset.triggerEvent,
-    })
-    setTemplateFlowStep("editor")
-  }
-
-  // Get trigger event label by value
-  const getTriggerEventLabel = (value: string) => {
-    const event = orderEventTypes.find(e => e.value === value)
-    return event?.label || value
-  }
-
   // Manual send handler
   const handleManualSend = async () => {
     if (!manualSendPhone || !manualSendMessage) {
@@ -338,31 +141,15 @@ export default function WhatsAppPage() {
     }
   }
 
-  // Status badge helper
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case "sent":
-        return <Badge variant="secondary" className="gap-1"><CheckCircle className="h-3 w-3" />{t("wa.sent")}</Badge>
-      case "delivered":
-        return <Badge variant="default" className="gap-1"><CheckCircle className="h-3 w-3" />{t("wa.delivered")}</Badge>
-      case "read":
-        return <Badge className="gap-1 bg-green-500"><Eye className="h-3 w-3" />{t("wa.read")}</Badge>
-      case "failed":
-        return <Badge variant="destructive" className="gap-1"><XCircle className="h-3 w-3" />{t("wa.failed")}</Badge>
-      default:
-        return <Badge variant="outline" className="gap-1"><AlertCircle className="h-3 w-3" />{locale === "ru" ? "Ожидает" : "Pending"}</Badge>
-    }
-  }
-
   return (
     <SubscriptionGate>
     <div className="space-y-6">
       {/* Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-semibold">WhatsApp</h1>
+          <h1 className="text-2xl font-semibold">{t("wa.broadcastTitle")}</h1>
           <p className="text-muted-foreground">
-            {t("wa.subtitle")}
+            {t("wa.broadcastSubtitle")}
           </p>
         </div>
         <Badge
@@ -379,27 +166,33 @@ export default function WhatsAppPage() {
 
       {/* Main Tabs */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList className="w-full grid grid-cols-2 sm:grid-cols-4 lg:w-auto lg:inline-grid">
-          <TabsTrigger value="sessions" className="gap-2">
+        <TabsList className="w-full grid grid-cols-3 lg:w-auto lg:inline-grid">
+          <TabsTrigger value="broadcasts" className="gap-2">
+            <Megaphone className="h-4 w-4 hidden sm:block" />
+            {t("wa.broadcasts")}
+          </TabsTrigger>
+          <TabsTrigger value="contacts" className="gap-2">
+            <Users className="h-4 w-4 hidden sm:block" />
+            {t("wa.contacts")}
+          </TabsTrigger>
+          <TabsTrigger value="connection" className="gap-2">
             <MessageSquare className="h-4 w-4 hidden sm:block" />
-            {t("wa.sessions")}
-          </TabsTrigger>
-          <TabsTrigger value="salesman" className="gap-2">
-            <Bot className="h-4 w-4 hidden sm:block" />
-            {t("wa.aiSalesman")}
-          </TabsTrigger>
-          <TabsTrigger value="messages" className="gap-2">
-            <History className="h-4 w-4 hidden sm:block" />
-            {t("wa.messages")}
-          </TabsTrigger>
-          <TabsTrigger value="stats" className="gap-2">
-            <BarChart3 className="h-4 w-4 hidden sm:block" />
-            {t("wa.stats")}
+            {t("wa.connection")}
           </TabsTrigger>
         </TabsList>
 
-        {/* Sessions Tab */}
-        <TabsContent value="sessions" className="space-y-6 mt-6">
+        {/* Broadcasts Tab */}
+        <TabsContent value="broadcasts" className="space-y-6 mt-6">
+          <BroadcastsTab />
+        </TabsContent>
+
+        {/* Contacts Tab */}
+        <TabsContent value="contacts" className="space-y-6 mt-6">
+          <ContactsTab />
+        </TabsContent>
+
+        {/* Connection Tab */}
+        <TabsContent value="connection" className="space-y-6 mt-6">
           {/* Sessions Card */}
           <Card className="glass-card">
             <CardHeader>
@@ -520,621 +313,6 @@ export default function WhatsAppPage() {
               )}
             </CardContent>
           </Card>
-
-          {/* Orders Monitoring */}
-          <FeatureGate feature="whatsapp_auto">
-          <Card className="glass-card">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <ShoppingBag className="h-5 w-5" />
-                {t("wa.ordersMonitoring")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-sm text-muted-foreground mb-4">
-                {t("wa.ordersMonitoringDesc")}
-              </p>
-              {kaspiStores && kaspiStores.length > 0 ? (
-                <div className="space-y-3">
-                  {kaspiStores.map((store) => (
-                    <OrdersPollingToggle
-                      key={store.id}
-                      storeId={store.id}
-                      storeName={store.name}
-                      onToggle={(enabled) => {
-                        toggleOrdersPolling.mutate(
-                          { storeId: store.id, enabled },
-                          {
-                            onSuccess: () => {
-                              toast.success(
-                                `${t(enabled ? "wa.monitoringEnabled" : "wa.monitoringDisabled")} ${t("wa.for")} ${store.name}`
-                              )
-                            },
-                            onError: () => {
-                              toast.error(t("common.error"))
-                            },
-                          }
-                        )
-                      }}
-                    />
-                  ))}
-                </div>
-              ) : (
-                <p className="text-sm text-muted-foreground text-center py-4">
-                  {t("wa.noConnectedStores")}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-          </FeatureGate>
-
-          {/* Templates */}
-          <Card className="glass-card">
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <FileText className="h-5 w-5" />
-                  {t("wa.messageTemplates")}
-                </span>
-                <Button size="sm" onClick={() => { setEditingTemplate(null); setTemplateForm({ name: "", name_en: "", message: "", variables: [], trigger_event: "" }); setTemplateFlowStep("picker") }}>
-                  <Plus className="h-4 w-4 mr-2" />
-                  {t("common.add")}
-                </Button>
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {templatesLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              ) : templates && templates.length > 0 ? (
-                <div className="space-y-4">
-                  {templates.map((template) => (
-                    <div key={template.id} className="p-4 rounded-lg bg-muted/30">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-3 flex-wrap">
-                            <h3 className="font-semibold">{locale === "ru" ? template.name : template.name_en || template.name}</h3>
-                            {template.trigger_event && (
-                              <Badge variant="secondary" className="text-xs gap-1">
-                                <Clock className="h-3 w-3" />
-                                {getTriggerEventLabel(template.trigger_event)}
-                              </Badge>
-                            )}
-                            <Switch checked={template.is_active} onCheckedChange={() => handleToggleTemplate(template)} />
-                          </div>
-                          <p className="text-sm text-muted-foreground mt-2 p-3 bg-background/50 rounded-lg">{template.message}</p>
-                          <div className="flex flex-wrap gap-2 mt-3">
-                            {template.variables.map((v) => (
-                              <Badge key={v} variant="outline" className="text-xs">{`{{${v}}}`}</Badge>
-                            ))}
-                          </div>
-                        </div>
-                        <div className="flex gap-2">
-                          <Button variant="ghost" size="icon" onClick={() => openEditTemplate(template)}>
-                            <Edit className="h-4 w-4" />
-                          </Button>
-                          <Button variant="ghost" size="icon" className="text-destructive" onClick={() => handleDeleteTemplate(template.id)}>
-                            <Trash2 className="h-4 w-4" />
-                          </Button>
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-center text-muted-foreground py-8">
-                  {t("wa.noTemplates")}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* Settings */}
-          {settings && (
-            <Card className="glass-card">
-              <CardHeader>
-                <CardTitle className="flex items-center gap-2">
-                  <Settings2 className="h-5 w-5" />
-                  {t("wa.settings")}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-4">
-                <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                  <div className="space-y-2">
-                    <Label>{t("wa.dailyLimit")}</Label>
-                    <Input
-                      type="number"
-                      value={settings.daily_limit}
-                      onChange={(e) => updateSettings.mutate({ daily_limit: Number(e.target.value) })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t("wa.interval")}</Label>
-                    <Input
-                      type="number"
-                      value={settings.interval_seconds}
-                      onChange={(e) => updateSettings.mutate({ interval_seconds: Number(e.target.value) })}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t("wa.workStart")}</Label>
-                    <Input type="time" value={settings.work_hours_start} onChange={(e) => updateSettings.mutate({ work_hours_start: e.target.value })} />
-                  </div>
-                  <div className="space-y-2">
-                    <Label>{t("wa.workEnd")}</Label>
-                    <Input type="time" value={settings.work_hours_end} onChange={(e) => updateSettings.mutate({ work_hours_end: e.target.value })} />
-                  </div>
-                </div>
-              </CardContent>
-            </Card>
-          )}
-        </TabsContent>
-
-        {/* AI Salesman Tab */}
-        <TabsContent value="salesman" className="space-y-6 mt-6">
-          <FeatureGate feature="ai_salesman">
-          {/* AI Settings */}
-          <Card className="glass-card">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <Bot className="h-5 w-5" />
-                {t("wa.aiSettings")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {salesmanSettingsLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              ) : salesmanSettings && salesmanSettings.length > 0 ? (
-                <div className="space-y-6">
-                  {salesmanSettings.map((store) => (
-                    <div key={store.store_id} className="p-4 rounded-lg bg-muted/30 space-y-4">
-                      <div className="flex items-center justify-between">
-                        <h3 className="font-semibold">{store.store_name}</h3>
-                        <div className="flex items-center gap-2">
-                          <span className="text-sm text-muted-foreground">
-                            {t("wa.aiEnabled")}
-                          </span>
-                          <Switch
-                            checked={store.ai_enabled}
-                            onCheckedChange={(checked) => updateSalesmanSettings.mutate({ storeId: store.store_id, ai_enabled: checked })}
-                          />
-                        </div>
-                      </div>
-
-                      {store.ai_enabled && (
-                        <div className="grid sm:grid-cols-2 lg:grid-cols-3 gap-4">
-                          <div className="space-y-2">
-                            <Label>{t("wa.tone")}</Label>
-                            <Select
-                              value={store.ai_tone || "friendly"}
-                              onValueChange={(value) => updateSalesmanSettings.mutate({ storeId: store.store_id, ai_tone: value })}
-                            >
-                              <SelectTrigger>
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="friendly">{t("wa.friendly")}</SelectItem>
-                                <SelectItem value="professional">{t("wa.professional")}</SelectItem>
-                                <SelectItem value="casual">{t("wa.casual")}</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          </div>
-                          <div className="space-y-2">
-                            <Label>{t("wa.maxDiscount")}</Label>
-                            <Input
-                              type="number"
-                              value={store.ai_discount_percent || ""}
-                              placeholder="0"
-                              onChange={(e) => updateSalesmanSettings.mutate({ storeId: store.store_id, ai_discount_percent: Number(e.target.value) || null })}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>{t("wa.promoCode")}</Label>
-                            <Input
-                              value={store.ai_promo_code || ""}
-                              placeholder="PROMO10"
-                              onChange={(e) => updateSalesmanSettings.mutate({ storeId: store.store_id, ai_promo_code: e.target.value || null })}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>{t("wa.reviewBonus")}</Label>
-                            <Input
-                              value={store.ai_review_bonus || ""}
-                              placeholder={t("wa.reviewBonusDefault")}
-                              onChange={(e) => updateSalesmanSettings.mutate({ storeId: store.store_id, ai_review_bonus: e.target.value || null })}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>{t("wa.delay")}</Label>
-                            <Input
-                              type="number"
-                              value={store.ai_send_delay_minutes}
-                              onChange={(e) => updateSalesmanSettings.mutate({ storeId: store.store_id, ai_send_delay_minutes: Number(e.target.value) })}
-                            />
-                          </div>
-                          <div className="space-y-2">
-                            <Label>{t("wa.messagesLimit")}</Label>
-                            <Input
-                              type="number"
-                              value={store.ai_max_messages_per_day}
-                              onChange={(e) => updateSalesmanSettings.mutate({ storeId: store.store_id, ai_max_messages_per_day: Number(e.target.value) })}
-                            />
-                          </div>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-center text-muted-foreground py-8">
-                  {t("wa.noStoresAI")}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-
-          {/* AI Stats */}
-          {salesmanStats && (
-            <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <Card className="glass-card">
-                <CardContent className="pt-6">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 rounded-full bg-primary/10">
-                      <Send className="h-6 w-6 text-primary" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">{t("wa.totalMessages")}</p>
-                      <p className="text-2xl font-bold">{salesmanStats.total_messages}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="glass-card">
-                <CardContent className="pt-6">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 rounded-full bg-green-500/10">
-                      <TrendingUp className="h-6 w-6 text-green-500" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">{t("wa.newOrders")}</p>
-                      <p className="text-2xl font-bold">{salesmanStats.by_trigger?.new_order || 0}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="glass-card">
-                <CardContent className="pt-6">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 rounded-full bg-blue-500/10">
-                      <History className="h-6 w-6 text-blue-500" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">{t("wa.repeatCustomers")}</p>
-                      <p className="text-2xl font-bold">{salesmanStats.by_trigger?.repeat_customer || 0}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-              <Card className="glass-card">
-                <CardContent className="pt-6">
-                  <div className="flex items-center gap-4">
-                    <div className="p-3 rounded-full bg-yellow-500/10">
-                      <MessageSquare className="h-6 w-6 text-yellow-500" />
-                    </div>
-                    <div>
-                      <p className="text-sm text-muted-foreground">{t("wa.reviewRequests")}</p>
-                      <p className="text-2xl font-bold">{salesmanStats.by_trigger?.review_request || 0}</p>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            </div>
-          )}
-
-          {/* AI History */}
-          <Card className="glass-card">
-            <CardHeader>
-              <CardTitle className="flex items-center gap-2">
-                <History className="h-5 w-5" />
-                {t("wa.aiMessageHistory")}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {salesmanHistoryLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              ) : salesmanHistory?.messages && salesmanHistory.messages.length > 0 ? (
-                <div className="space-y-3">
-                  {salesmanHistory.messages.map((msg) => (
-                    <div key={msg.id} className="p-4 rounded-lg bg-muted/30">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2">
-                            <span className="font-medium">{msg.customer_name || msg.customer_phone}</span>
-                            <Badge variant="outline">{msg.trigger}</Badge>
-                          </div>
-                          <p className="text-sm text-muted-foreground">{msg.text}</p>
-                          {msg.products_suggested.length > 0 && (
-                            <div className="flex flex-wrap gap-1 mt-2">
-                              {msg.products_suggested.map((p) => (
-                                <Badge key={p} variant="secondary" className="text-xs">{p}</Badge>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap">
-                          {new Date(msg.created_at).toLocaleDateString()}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="text-center text-muted-foreground py-8">
-                  {t("wa.noAIMessages")}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-          </FeatureGate>
-        </TabsContent>
-
-        {/* Messages Tab */}
-        <TabsContent value="messages" className="space-y-6 mt-6">
-          {/* Filters */}
-          <Card className="glass-card">
-            <CardContent className="pt-6">
-              <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                <div className="space-y-2">
-                  <Label>{t("common.status")}</Label>
-                  <Select
-                    value={messageFilters.status_filter || "all"}
-                    onValueChange={(v) => setMessageFilters({ ...messageFilters, status_filter: v === "all" ? undefined : v, page: 1 })}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="all">{t("common.all")}</SelectItem>
-                      <SelectItem value="sent">{t("wa.sent")}</SelectItem>
-                      <SelectItem value="delivered">{t("wa.delivered")}</SelectItem>
-                      <SelectItem value="read">{t("wa.read")}</SelectItem>
-                      <SelectItem value="failed">{t("wa.failed")}</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-2">
-                  <Label>{t("wa.phone")}</Label>
-                  <Input
-                    placeholder="+7 777..."
-                    value={messageFilters.phone || ""}
-                    onChange={(e) => setMessageFilters({ ...messageFilters, phone: e.target.value || undefined, page: 1 })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>{t("wa.dateFrom")}</Label>
-                  <Input
-                    type="date"
-                    value={messageFilters.date_from || ""}
-                    onChange={(e) => setMessageFilters({ ...messageFilters, date_from: e.target.value || undefined, page: 1 })}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>{t("wa.dateTo")}</Label>
-                  <Input
-                    type="date"
-                    value={messageFilters.date_to || ""}
-                    onChange={(e) => setMessageFilters({ ...messageFilters, date_to: e.target.value || undefined, page: 1 })}
-                  />
-                </div>
-                <div className="flex items-end">
-                  <Button variant="outline" onClick={() => setMessageFilters({ page: 1, per_page: 20 })} className="w-full">
-                    {t("common.reset")}
-                  </Button>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Messages List */}
-          <Card className="glass-card">
-            <CardHeader>
-              <CardTitle className="flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <History className="h-5 w-5" />
-                  {t("wa.messageHistory")}
-                </span>
-                {messagesData && (
-                  <span className="text-sm font-normal text-muted-foreground">
-                    {t("wa.total")} {messagesData.total}
-                  </span>
-                )}
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {messagesLoading ? (
-                <div className="flex justify-center py-8">
-                  <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-                </div>
-              ) : messagesData?.messages && messagesData.messages.length > 0 ? (
-                <div className="space-y-3">
-                  {messagesData.messages.map((msg) => (
-                    <div key={msg.id} className="p-4 rounded-lg bg-muted/30">
-                      <div className="flex items-start justify-between gap-4">
-                        <div className="flex-1">
-                          <div className="flex items-center gap-2 mb-2 flex-wrap">
-                            <span className="font-medium">{msg.recipient_name || msg.recipient_phone}</span>
-                            {getStatusBadge(msg.status)}
-                            {msg.template_name && <Badge variant="secondary">{msg.template_name}</Badge>}
-                          </div>
-                          <p className="text-sm text-muted-foreground line-clamp-2">{msg.message_content}</p>
-                          {msg.error_message && (
-                            <p className="text-xs text-destructive mt-1">{msg.error_message}</p>
-                          )}
-                        </div>
-                        <span className="text-xs text-muted-foreground whitespace-nowrap">
-                          {new Date(msg.created_at).toLocaleString()}
-                        </span>
-                      </div>
-                    </div>
-                  ))}
-
-                  {/* Pagination */}
-                  {messagesData.total > messageFilters.per_page! && (
-                    <div className="flex justify-center gap-2 pt-4">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={messageFilters.page === 1}
-                        onClick={() => setMessageFilters({ ...messageFilters, page: (messageFilters.page || 1) - 1 })}
-                      >
-                        {t("wa.previous")}
-                      </Button>
-                      <span className="flex items-center px-4 text-sm text-muted-foreground">
-                        {messageFilters.page} / {Math.ceil(messagesData.total / (messageFilters.per_page || 20))}
-                      </span>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        disabled={(messageFilters.page || 1) >= Math.ceil(messagesData.total / (messageFilters.per_page || 20))}
-                        onClick={() => setMessageFilters({ ...messageFilters, page: (messageFilters.page || 1) + 1 })}
-                      >
-                        {t("common.next")}
-                      </Button>
-                    </div>
-                  )}
-                </div>
-              ) : (
-                <p className="text-center text-muted-foreground py-8">
-                  {t("wa.noMessages")}
-                </p>
-              )}
-            </CardContent>
-          </Card>
-        </TabsContent>
-
-        {/* Stats Tab */}
-        <TabsContent value="stats" className="space-y-6 mt-6">
-          {statsLoading ? (
-            <div className="flex justify-center py-8">
-              <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
-            </div>
-          ) : waStats && (
-            <>
-              {/* Summary Cards */}
-              <div className="grid sm:grid-cols-2 lg:grid-cols-5 gap-4">
-                <Card className="glass-card">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground">{t("wa.sent")}</p>
-                      <p className="text-3xl font-bold text-primary">{waStats.total_sent}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="glass-card">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground">{t("wa.delivered")}</p>
-                      <p className="text-3xl font-bold text-green-500">{waStats.total_delivered}</p>
-                      <p className="text-xs text-muted-foreground">{waStats.delivery_rate}%</p>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="glass-card">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground">{t("wa.read")}</p>
-                      <p className="text-3xl font-bold text-blue-500">{waStats.total_read}</p>
-                      <p className="text-xs text-muted-foreground">{waStats.read_rate}%</p>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="glass-card">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground">{t("wa.errors")}</p>
-                      <p className="text-3xl font-bold text-destructive">{waStats.total_failed}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-                <Card className="glass-card">
-                  <CardContent className="pt-6">
-                    <div className="text-center">
-                      <p className="text-sm text-muted-foreground">{t("wa.today")}</p>
-                      <p className="text-3xl font-bold">{waStats.today_sent}</p>
-                      <p className="text-xs text-muted-foreground">/ {waStats.today_limit}</p>
-                    </div>
-                  </CardContent>
-                </Card>
-              </div>
-
-              {/* Chart */}
-              <Card className="glass-card">
-                <CardHeader>
-                  <CardTitle className="flex items-center gap-2">
-                    <BarChart3 className="h-5 w-5" />
-                    {t("wa.weekMessages")}
-                  </CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {waStats.messages_by_day.length > 0 ? (
-                    <div className="space-y-4">
-                      {waStats.messages_by_day.map((day) => (
-                        <div key={day.date} className="space-y-2">
-                          <div className="flex items-center justify-between text-sm">
-                            <span>{new Date(day.date).toLocaleDateString(locale === "ru" ? "ru-RU" : "kk-KZ", { weekday: "short", day: "numeric", month: "short" })}</span>
-                            <span className="text-muted-foreground">{day.sent} {t("wa.msgs")}</span>
-                          </div>
-                          <div className="flex h-4 rounded-full overflow-hidden bg-muted">
-                            {day.sent > 0 && (
-                              <>
-                                <div
-                                  className="bg-green-500"
-                                  style={{ width: `${(day.read / day.sent) * 100}%` }}
-                                  title={`${t("wa.read")}: ${day.read}`}
-                                />
-                                <div
-                                  className="bg-blue-500"
-                                  style={{ width: `${((day.delivered - day.read) / day.sent) * 100}%` }}
-                                  title={`${t("wa.delivered")}: ${day.delivered - day.read}`}
-                                />
-                                <div
-                                  className="bg-gray-400"
-                                  style={{ width: `${((day.sent - day.delivered) / day.sent) * 100}%` }}
-                                  title={`${t("wa.sent")}: ${day.sent - day.delivered}`}
-                                />
-                                {day.failed > 0 && (
-                                  <div
-                                    className="bg-red-500"
-                                    style={{ width: `${(day.failed / (day.sent + day.failed)) * 100}%` }}
-                                    title={`${t("wa.errors")}: ${day.failed}`}
-                                  />
-                                )}
-                              </>
-                            )}
-                          </div>
-                        </div>
-                      ))}
-                      <div className="flex items-center gap-4 text-xs text-muted-foreground pt-2">
-                        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-green-500" />{t("wa.read")}</div>
-                        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-blue-500" />{t("wa.delivered")}</div>
-                        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-gray-400" />{t("wa.sent")}</div>
-                        <div className="flex items-center gap-1"><div className="w-3 h-3 rounded bg-red-500" />{t("wa.errors")}</div>
-                      </div>
-                    </div>
-                  ) : (
-                    <p className="text-center text-muted-foreground py-8">
-                      {locale === "ru" ? "Нет данных за эту неделю" : "No data for this week"}
-                    </p>
-                  )}
-                </CardContent>
-              </Card>
-            </>
-          )}
         </TabsContent>
       </Tabs>
 
@@ -1239,26 +417,366 @@ export default function WhatsAppPage() {
           )}
         </DialogContent>
       </Dialog>
-
-      {/* Template Picker (bottom sheet) */}
-      <TemplatePicker
-        open={templateFlowStep === "picker"}
-        onOpenChange={(open) => { if (!open) setTemplateFlowStep("closed") }}
-        onSelect={handlePresetSelect}
-      />
-
-      {/* Template Editor (right sheet, fullscreen on mobile) */}
-      <TemplateEditor
-        open={templateFlowStep === "editor"}
-        onOpenChange={(open) => { if (!open) setTemplateFlowStep("closed") }}
-        form={templateForm}
-        setForm={setTemplateForm}
-        onSave={handleSaveTemplate}
-        isSaving={createTemplate.isPending || updateTemplate.isPending}
-        isEditing={!!editingTemplate}
-        triggerLabel={templateForm.trigger_event ? getTriggerEventLabel(templateForm.trigger_event) : ""}
-      />
     </div>
     </SubscriptionGate>
+  )
+}
+
+
+// ==================== Contacts Tab ====================
+
+function ContactsTab() {
+  const t = useT()
+  const { selectedStore } = useStore()
+  const [searchQuery, setSearchQuery] = useState("")
+  const [page, setPage] = useState(1)
+
+  const { data, isLoading } = useCustomerContacts({
+    store_id: selectedStore?.id,
+    search: searchQuery || undefined,
+    page,
+    per_page: 30,
+  })
+
+  const blockContact = useBlockContact()
+  const unblockContact = useUnblockContact()
+
+  const contacts = data?.contacts || []
+  const total = data?.total || 0
+
+  return (
+    <div className="space-y-4">
+      {/* Header with search */}
+      <Card className="glass-card">
+        <CardContent className="pt-6">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div>
+              <h3 className="font-semibold flex items-center gap-2">
+                <Users className="h-5 w-5" />
+                {t("wa.contacts")}
+              </h3>
+              <p className="text-sm text-muted-foreground">
+                {t("wa.contactsDesc")}
+              </p>
+            </div>
+            <Badge variant="secondary" className="text-sm shrink-0">
+              {t("wa.totalContacts")}: {total}
+            </Badge>
+          </div>
+          <div className="mt-4 relative">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder={t("wa.searchContacts")}
+              value={searchQuery}
+              onChange={(e) => { setSearchQuery(e.target.value); setPage(1) }}
+              className="pl-10"
+            />
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Contacts list */}
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2, 3].map(i => (
+            <Card key={i} className="glass-card">
+              <CardContent className="p-4">
+                <div className="h-12 bg-muted/50 rounded animate-pulse" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : contacts.length === 0 ? (
+        <Card className="glass-card">
+          <CardContent className="p-8 text-center">
+            <Users className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+            <h3 className="text-lg font-semibold mb-2">{t("wa.noContacts")}</h3>
+            <p className="text-muted-foreground">{t("wa.noContactsDesc")}</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-2">
+          {contacts.map(contact => (
+            <Card key={contact.id} className="glass-card">
+              <CardContent className="p-4">
+                <div className="flex items-center justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2">
+                      <p className="font-medium truncate">
+                        {contact.name || contact.phone}
+                      </p>
+                      {contact.store_name && (
+                        <Badge variant="outline" className="text-xs shrink-0">
+                          {contact.store_name}
+                        </Badge>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-3 text-sm text-muted-foreground mt-1">
+                      <span className="flex items-center gap-1">
+                        <Phone className="h-3 w-3" />
+                        {contact.phone}
+                      </span>
+                      <span>{contact.orders_count} {t("wa.orders")}</span>
+                    </div>
+                  </div>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => {
+                      if (contact.is_blocked) {
+                        unblockContact.mutate(contact.id)
+                      } else {
+                        blockContact.mutate(contact.id)
+                      }
+                    }}
+                  >
+                    <Ban className="h-4 w-4 mr-1" />
+                    {contact.is_blocked ? t("wa.unblock") : t("wa.block")}
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+
+          {/* Pagination */}
+          {total > 30 && (
+            <div className="flex justify-center gap-2 pt-4">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page <= 1}
+                onClick={() => setPage(p => p - 1)}
+              >
+                {t("wa.previous")}
+              </Button>
+              <span className="flex items-center text-sm text-muted-foreground px-3">
+                {page} / {Math.ceil(total / 30)}
+              </span>
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={page >= Math.ceil(total / 30)}
+                onClick={() => setPage(p => p + 1)}
+              >
+                &rarr;
+              </Button>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+
+// ==================== Broadcasts Tab ====================
+
+function BroadcastsTab() {
+  const t = useT()
+  const { selectedStore } = useStore()
+  const { data: stores } = useStores()
+  const [showCreate, setShowCreate] = useState(false)
+  const [newCampaign, setNewCampaign] = useState({
+    name: "",
+    message_text: "",
+    filter_min_orders: 0,
+    filter_store_id: "",
+  })
+
+  const { data: broadcasts, isLoading } = useBroadcasts()
+  const createBroadcast = useCreateBroadcast()
+  const startBroadcast = useStartBroadcast()
+  const cancelBroadcast = useCancelBroadcast()
+
+  const statusBadge = (status: string) => {
+    const map: Record<string, { label: string; className: string }> = {
+      draft: { label: t("wa.broadcastDraft"), className: "bg-muted text-muted-foreground" },
+      sending: { label: t("wa.broadcastSending"), className: "bg-blue-500/20 text-blue-600" },
+      completed: { label: t("wa.broadcastCompleted"), className: "bg-green-500/20 text-green-600" },
+      failed: { label: t("wa.broadcastFailed"), className: "bg-red-500/20 text-red-600" },
+      cancelled: { label: t("wa.broadcastCancelled"), className: "bg-yellow-500/20 text-yellow-600" },
+    }
+    const s = map[status] || map.draft
+    return <Badge className={s.className}>{s.label}</Badge>
+  }
+
+  const handleCreate = async () => {
+    if (!newCampaign.name || !newCampaign.message_text) {
+      toast.error("Fill in name and message")
+      return
+    }
+    try {
+      await createBroadcast.mutateAsync({
+        name: newCampaign.name,
+        message_text: newCampaign.message_text,
+        filter_min_orders: newCampaign.filter_min_orders,
+        filter_store_id: newCampaign.filter_store_id || undefined,
+      })
+      toast.success("Broadcast created")
+      setShowCreate(false)
+      setNewCampaign({ name: "", message_text: "", filter_min_orders: 0, filter_store_id: "" })
+    } catch {
+      toast.error("Failed to create broadcast")
+    }
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h3 className="font-semibold flex items-center gap-2">
+            <Megaphone className="h-5 w-5" />
+            {t("wa.broadcasts")}
+          </h3>
+        </div>
+        <Button onClick={() => setShowCreate(true)}>
+          <Plus className="h-4 w-4 mr-2" />
+          {t("wa.newBroadcast")}
+        </Button>
+      </div>
+
+      {/* Create dialog */}
+      <Dialog open={showCreate} onOpenChange={setShowCreate}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>{t("wa.newBroadcast")}</DialogTitle>
+            <DialogDescription>{t("wa.contactsDesc")}</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>{t("wa.broadcastName")}</Label>
+              <Input
+                value={newCampaign.name}
+                onChange={e => setNewCampaign(c => ({ ...c, name: e.target.value }))}
+                placeholder="Акция февраль"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>{t("wa.broadcastMessage")}</Label>
+              <Textarea
+                value={newCampaign.message_text}
+                onChange={e => setNewCampaign(c => ({ ...c, message_text: e.target.value }))}
+                placeholder="Здравствуйте! У нас скидки до 30%..."
+                rows={4}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>{t("wa.broadcastMinOrders")}</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={newCampaign.filter_min_orders}
+                  onChange={e => setNewCampaign(c => ({ ...c, filter_min_orders: parseInt(e.target.value) || 0 }))}
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>{t("wa.broadcastStore")}</Label>
+                <Select
+                  value={newCampaign.filter_store_id}
+                  onValueChange={v => setNewCampaign(c => ({ ...c, filter_store_id: v === "all" ? "" : v }))}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={t("wa.broadcastAllStores")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">{t("wa.broadcastAllStores")}</SelectItem>
+                    {stores?.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <Button
+              className="w-full"
+              onClick={handleCreate}
+              disabled={createBroadcast.isPending}
+            >
+              {createBroadcast.isPending && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              {t("wa.broadcastCreate")}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Broadcasts list */}
+      {isLoading ? (
+        <div className="space-y-3">
+          {[1, 2].map(i => (
+            <Card key={i} className="glass-card">
+              <CardContent className="p-4">
+                <div className="h-16 bg-muted/50 rounded animate-pulse" />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : !broadcasts?.length ? (
+        <Card className="glass-card">
+          <CardContent className="p-8 text-center">
+            <Megaphone className="h-12 w-12 mx-auto text-muted-foreground mb-4" />
+            <h3 className="text-lg font-semibold mb-2">{t("wa.noBroadcasts")}</h3>
+            <p className="text-muted-foreground">{t("wa.noBroadcastsDesc")}</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-3">
+          {broadcasts.map(campaign => (
+            <Card key={campaign.id} className="glass-card">
+              <CardContent className="p-4">
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="flex items-center gap-2 mb-1">
+                      <h4 className="font-medium truncate">{campaign.name}</h4>
+                      {statusBadge(campaign.status)}
+                    </div>
+                    <p className="text-sm text-muted-foreground truncate">
+                      {campaign.message_text.substring(0, 80)}...
+                    </p>
+                    <div className="flex items-center gap-4 mt-2 text-xs text-muted-foreground">
+                      <span>{t("wa.broadcastRecipients")}: {campaign.total_recipients}</span>
+                      {campaign.status === "sending" && (
+                        <span className="text-blue-600">
+                          {t("wa.broadcastProgress")}: {campaign.sent_count}/{campaign.total_recipients}
+                        </span>
+                      )}
+                      {campaign.status === "completed" && (
+                        <span className="text-green-600">
+                          {t("wa.sent")}: {campaign.sent_count}, {t("wa.failed")}: {campaign.failed_count}
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex gap-2 shrink-0">
+                    {campaign.status === "draft" && (
+                      <Button
+                        size="sm"
+                        onClick={() => startBroadcast.mutate(campaign.id)}
+                        disabled={startBroadcast.isPending}
+                      >
+                        <Play className="h-4 w-4 mr-1" />
+                        {t("wa.broadcastStart")}
+                      </Button>
+                    )}
+                    {(campaign.status === "draft" || campaign.status === "sending") && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => cancelBroadcast.mutate(campaign.id)}
+                        disabled={cancelBroadcast.isPending}
+                      >
+                        <XCircle className="h-4 w-4 mr-1" />
+                        {t("wa.broadcastCancel")}
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
+    </div>
   )
 }

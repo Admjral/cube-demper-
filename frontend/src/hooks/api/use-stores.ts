@@ -68,3 +68,16 @@ export function useSyncStore() {
     },
   })
 }
+
+// Update store API token
+export function useUpdateStoreApiToken() {
+  const queryClient = useQueryClient()
+
+  return useMutation({
+    mutationFn: ({ storeId, apiToken }: { storeId: string; apiToken: string }) =>
+      api.patch<{ status: string; message: string }>(`/kaspi/stores/${storeId}/api-token`, { api_token: apiToken }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: storeKeys.all })
+    },
+  })
+}

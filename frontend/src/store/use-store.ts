@@ -83,6 +83,7 @@ export const useStore = create<AppState>()(
         sidebarOpen: state.sidebarOpen,
         locale: state.locale,
       }),
+      skipHydration: true,
     }
   )
 )

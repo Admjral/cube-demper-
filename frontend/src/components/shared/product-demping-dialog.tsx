@@ -14,7 +14,8 @@ import { useProductDempingDetails, useUpdateProductDemping, usePriceHistory, use
 import { formatPrice } from '@/lib/utils'
 import { PriceHistoryView } from './price-history-view'
 import { CityPricesDialog } from './city-prices-dialog'
-import { RefreshCw, Loader2, CheckCircle, AlertCircle, Play, MapPin } from 'lucide-react'
+import { useT } from '@/lib/i18n'
+import { RefreshCw, Loader2, CheckCircle, AlertCircle, Play, MapPin, Package } from 'lucide-react'
 import { toast } from 'sonner'
 
 interface ProductDempingDialogProps {
@@ -36,7 +37,11 @@ export function ProductDempingDialog({ productId, open, onOpenChange }: ProductD
   const [maxPrice, setMaxPrice] = useState<number | null>(null)
   const [useGlobalStep, setUseGlobalStep] = useState(true)
   const [customStep, setCustomStep] = useState(100)
+  const [preOrderEnabled, setPreOrderEnabled] = useState(false)
+  const [preOrderDays, setPreOrderDays] = useState(7)
   const [showCityDialog, setShowCityDialog] = useState(false)
+
+  const t = useT()
 
   // Load initial values from details
   useEffect(() => {
@@ -47,6 +52,8 @@ export function ProductDempingDialog({ productId, open, onOpenChange }: ProductD
       setMaxPrice(details.max_price)
       setUseGlobalStep(!details.price_step_override)
       setCustomStep(details.price_step_override || details.store_price_step)
+      setPreOrderEnabled((details.pre_order_days || 0) > 0)
+      setPreOrderDays(details.pre_order_days || 7)
     }
   }, [details])
 
@@ -61,6 +68,7 @@ export function ProductDempingDialog({ productId, open, onOpenChange }: ProductD
         min_price: minPrice,
         max_price: maxPrice,
         price_step_override: useGlobalStep ? null : customStep,
+        pre_order_days: preOrderEnabled ? preOrderDays : 0,
       }
     })
 
@@ -221,6 +229,58 @@ export function ProductDempingDialog({ productId, open, onOpenChange }: ProductD
                       Настроить города
                     </Button>
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Предзаказ */}
+              <Card className={preOrderEnabled ? "border-orange-500/50 bg-orange-500/5" : ""}>
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between gap-4">
+                    <div className="flex items-center gap-3">
+                      <Package className="h-5 w-5 text-orange-500" />
+                      <div>
+                        <p className="font-medium">{t("preOrder.title")}</p>
+                        <p className="text-sm text-muted-foreground">
+                          {t("preOrder.description")}
+                        </p>
+                      </div>
+                    </div>
+                    <Switch
+                      checked={preOrderEnabled}
+                      onCheckedChange={setPreOrderEnabled}
+                    />
+                  </div>
+                  {preOrderEnabled && (
+                    <div className="mt-4 space-y-3">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-sm">{t("preOrder.days")}</Label>
+                        <span className="text-sm font-medium tabular-nums">
+                          {preOrderDays} {t("preOrder.daysUnit")}
+                        </span>
+                      </div>
+                      <input
+                        type="range"
+                        min={1}
+                        max={30}
+                        value={preOrderDays}
+                        onChange={(e) => setPreOrderDays(parseInt(e.target.value))}
+                        className="w-full accent-orange-500"
+                      />
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>1 {t("preOrder.day")}</span>
+                        <span>30 {t("preOrder.daysUnit")}</span>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {t("preOrder.deliveryBy")}{" "}
+                        <span className="font-medium text-foreground">
+                          {new Date(Date.now() + preOrderDays * 86400000).toLocaleDateString("ru-RU", {
+                            day: "numeric",
+                            month: "long",
+                          })}
+                        </span>
+                      </p>
+                    </div>
+                  )}
                 </CardContent>
               </Card>
 

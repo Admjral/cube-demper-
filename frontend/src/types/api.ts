@@ -9,6 +9,8 @@ export interface KaspiStore {
   products_count: number
   last_sync: string | null
   is_active: boolean
+  api_key_set: boolean
+  api_key_valid: boolean
 }
 
 export interface KaspiAuthRequest {
@@ -186,6 +188,7 @@ export interface KaspiProduct {
   price: number // in tiyns
   min_profit: number
   bot_active: boolean
+  pre_order_days: number
   last_check_time: string | null
   availabilities: Record<string, any> | null
   created_at: string
@@ -272,6 +275,7 @@ export interface ProductDempingDetails {
   price_step_override: number | null
   demping_strategy: 'standard' | 'always_first' | 'stay_top_n'
   strategy_params: { top_position?: number } | null
+  pre_order_days: number
 
   // Global store settings (for display)
   store_price_step: number
@@ -290,6 +294,7 @@ export interface ProductDempingUpdate {
   price_step_override?: number | null
   demping_strategy?: 'standard' | 'always_first' | 'stay_top_n'
   strategy_params?: { top_position?: number } | null
+  pre_order_days?: number
 }
 
 // =============================================

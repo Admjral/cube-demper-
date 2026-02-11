@@ -3,9 +3,14 @@
 import { ThemeProvider } from "./theme-provider"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { Toaster } from "@/components/ui/sonner"
-import { useState } from "react"
+import { useEffect, useState } from "react"
+import { useStore } from "@/store/use-store"
 
 export function Providers({ children }: { children: React.ReactNode }) {
+  useEffect(() => {
+    useStore.persist.rehydrate()
+  }, [])
+
   const [queryClient] = useState(
     () =>
       new QueryClient({

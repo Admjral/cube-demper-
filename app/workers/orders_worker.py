@@ -28,6 +28,7 @@ from ..core.database import get_db_pool, close_pool
 from ..core.proxy_rotator import get_user_proxy_rotator, NoProxiesAllocatedError, NoProxiesAvailableError
 from ..services.kaspi_auth_service import get_active_session_with_refresh, KaspiAuthError
 from ..services.kaspi_mc_service import get_kaspi_mc_service, KaspiMCError
+from ..services.kaspi_orders_api import get_kaspi_orders_api, KaspiTokenInvalidError
 from ..services.order_event_processor import (
     get_order_event_processor,
     OrderEvent,
@@ -119,7 +120,8 @@ class OrdersWorker:
                 SELECT
                     s.id, s.user_id, s.merchant_id, s.name,
                     s.orders_polling_interval_seconds,
-                    s.last_orders_sync
+                    s.last_orders_sync,
+                    s.api_key, s.api_key_valid
                 FROM kaspi_stores s
                 WHERE s.is_active = TRUE
                 AND s.orders_polling_enabled = TRUE
@@ -145,29 +147,58 @@ class OrdersWorker:
 
         logger.debug(f"Polling orders for store: {store['name']}")
 
-        # Получаем сессию Kaspi
-        try:
-            session = await get_active_session_with_refresh(
-                str(user_id), str(store_id), self._pool
-            )
-        except KaspiAuthError as e:
-            logger.warning(f"No active session for store {store['name']}: {e}")
-            return
+        orders = None
+        api_key = store.get('api_key')
+        api_key_valid = store.get('api_key_valid', True)
 
-        if not session:
-            logger.warning(f"No session for store {store['name']}")
-            return
+        # Strategy 1: REST API with X-Auth-Token (returns real phone numbers)
+        if api_key and api_key_valid:
+            try:
+                orders_api = get_kaspi_orders_api()
+                now = datetime.utcnow()
+                orders = await orders_api.fetch_orders(
+                    api_token=api_key,
+                    date_from=now - timedelta(days=7),
+                    date_to=now,
+                    states=KASPI_ORDER_STATES[:6],
+                    size=self.batch_size,
+                )
+                logger.info(f"Fetched {len(orders)} orders via REST API for {store['name']}")
+            except KaspiTokenInvalidError:
+                logger.warning(f"API token invalid for store {store['name']}, marking as invalid")
+                async with self._pool.acquire() as mark_conn:
+                    await mark_conn.execute(
+                        "UPDATE kaspi_stores SET api_key_valid = FALSE WHERE id = $1",
+                        store_id
+                    )
+                orders = None
+            except Exception as e:
+                logger.warning(f"REST API failed for store {store['name']}: {e}")
+                orders = None
 
-        # Запрашиваем заказы через Kaspi API (с proxy rotation для module='orders')
-        try:
-            orders = await self._fetch_kaspi_orders(
-                session,
-                merchant_id,
-                user_id=user_id  # ✅ Use proxy pool for orders module (25 proxies)
-            )
-        except Exception as e:
-            logger.error(f"Error fetching orders from Kaspi: {e}")
-            return
+        # Strategy 2: Fallback to cookies-based API (legacy, masked phones since Feb 5 2026)
+        if orders is None:
+            try:
+                session = await get_active_session_with_refresh(
+                    str(user_id), str(store_id), self._pool
+                )
+            except KaspiAuthError as e:
+                logger.warning(f"No active session for store {store['name']}: {e}")
+                return
+
+            if not session:
+                logger.warning(f"No session for store {store['name']}")
+                return
+
+            try:
+                orders = await self._fetch_kaspi_orders(
+                    session,
+                    merchant_id,
+                    user_id=user_id
+                )
+            except Exception as e:
+                logger.error(f"Error fetching orders from Kaspi: {e}")
+                return
 
         if not orders:
             logger.debug(f"No orders for store {store['name']}")

@@ -288,7 +288,10 @@ SELECT * FROM price_history ORDER BY created_at DESC LIMIT 20;
 - **Secret scanning**: НИКОГДА не хардкодить API ключи в публичных репо. Использовать env vars + `None` дефолт
 
 ### Frontend Patterns (2026-02-09)
-- **Hydration #418**: Использовать `'\u00B7'` вместо `&middot;` в Next.js
+- **Hydration #418**: Использовать `'\u00B7'` вместо `&middot;` в Next.js. Также: `'\u00A9'` вместо `&copy;`
+- **Hydration #418 + Zustand persist**: `skipHydration: true` в persist config + `useStore.persist.rehydrate()` в useEffect (Providers). Без этого `locale` из localStorage десинхронит SSR/CSR
+- **Hydration #418 + next-themes**: НЕ использовать `dark:hidden`/`hidden dark:block` на Image. Вместо этого: `mounted` state + `resolvedTheme` для условного рендеринга
+- **useSearchParams()**: В Next.js 14+ требует `<Suspense>` обёртку для static generation. Вынести в отдельный компонент
 - **Mobile-first**: `grid-cols-1 sm:grid-cols-2 lg:grid-cols-4`, таблицы → `sm:hidden` карточки + `hidden sm:block` таблица
 - **Фиксированные ширины**: `w-full sm:w-[140px]`, `h-[250px] sm:h-[400px]`
 
@@ -354,3 +357,9 @@ SELECT * FROM price_history ORDER BY created_at DESC LIMIT 20;
 - **WhatsApp status нормализация**: WAHA возвращает `WORKING`/`SCAN_QR_CODE`, а приложение хранит `connected`/`qr_pending`. Фикс: `normalize_waha_status()` в `whatsapp.py`
 - **Legacy endpoints**: `/session/create` (singular) — мёртвый код, INSERT без `waha_api_key` (NOT NULL) = crash. Фронтенд использует `/sessions` (plural)
 - **Alembic chain**: `ba10cb14a230` (initial) и `6ce6a0fa5853` оба имеют `down_revision = None` — pre-existing multiple heads, не трогать
+
+### CORS & Middleware (2026-02-11)
+- **BaseHTTPMiddleware баг**: `BaseHTTPMiddleware` (Starlette) может «проглотить» CORS-заголовки при ошибках в route handler'ах. **Всегда** использовать pure ASGI middleware вместо `BaseHTTPMiddleware` когда middleware стоит рядом с `CORSMiddleware`
+- **Pure ASGI pattern**: `__init__(self, app)` + `__call__(self, scope, receive, send)` + `send_wrapper` для модификации headers
+- **Playwright endpoints**: ВСЕГДА добавлять `except Exception` catch-all с `HTTPException(500)` — Playwright может бросить `TimeoutError`, `BrowserError` и др., которые не наследуют от `KaspiAuthError`
+- **CORS + Railway proxy**: Если Railway proxy таймаутит запрос (>300с), ответ от прокси НЕ содержит CORS-заголовки → браузер показывает CORS ошибку вместо реальной

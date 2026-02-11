@@ -26,6 +26,11 @@ import {
   ShoppingBag,
   Clock,
   Package,
+  Key,
+  Eye,
+  EyeOff,
+  AlertTriangle,
+  ChevronDown,
 } from "lucide-react"
 import { toast } from "sonner"
 import {
@@ -33,6 +38,7 @@ import {
   useKaspiAuth,
   useDeleteStore,
   useSyncStore,
+  useUpdateStoreApiToken,
 } from "@/hooks/api/use-stores"
 
 export default function IntegrationsPage() {
@@ -40,12 +46,15 @@ export default function IntegrationsPage() {
   const [showAddDialog, setShowAddDialog] = useState(false)
   const [kaspiEmail, setKaspiEmail] = useState("")
   const [kaspiPassword, setKaspiPassword] = useState("")
+  const [apiTokenInputs, setApiTokenInputs] = useState<Record<string, string>>({})
+  const [showTokenInputs, setShowTokenInputs] = useState<Record<string, boolean>>({})
 
   // API hooks
   const { data: stores, isLoading: storesLoading } = useStores()
   const kaspiAuth = useKaspiAuth()
   const deleteStore = useDeleteStore()
   const syncStore = useSyncStore()
+  const updateApiToken = useUpdateStoreApiToken()
 
   const connectedStores = stores?.filter((s) => s.is_active) || []
   const totalProducts = stores?.reduce((acc, s) => acc + (s.products_count || 0), 0) || 0
@@ -86,6 +95,18 @@ export default function IntegrationsPage() {
       toast.success(t("integrations.storeDeleted"))
     } catch {
       toast.error(t("integrations.deleteError"))
+    }
+  }
+
+  const handleSaveApiToken = async (storeId: string) => {
+    const token = apiTokenInputs[storeId]
+    if (!token) return
+    try {
+      await updateApiToken.mutateAsync({ storeId, apiToken: token })
+      toast.success(t("integrations.apiTokenSaved"))
+      setApiTokenInputs((prev) => ({ ...prev, [storeId]: "" }))
+    } catch {
+      toast.error(t("integrations.apiTokenSaveError"))
     }
   }
 
@@ -226,6 +247,27 @@ export default function IntegrationsPage() {
         </Card>
       </div>
 
+      {/* Invalid token alert */}
+      {stores?.some((s) => s.api_key_set && !s.api_key_valid) && (
+        <div className="rounded-lg border border-yellow-500/50 bg-yellow-500/10 p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-yellow-500 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              {stores
+                .filter((s) => s.api_key_set && !s.api_key_valid)
+                .map((s) => (
+                  <p key={s.id} className="text-sm">
+                    {t("integrations.apiTokenExpiredAlert").replace("{name}", s.name)}
+                  </p>
+                ))}
+              <p className="text-xs text-muted-foreground">
+                {t("integrations.apiTokenExpiredWarning")}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Stores list */}
       {storesLoading ? (
         <div className="flex justify-center py-12">
@@ -304,6 +346,91 @@ export default function IntegrationsPage() {
                       <Trash2 className="h-4 w-4" />
                     </Button>
                   </div>
+                </div>
+
+                {/* API Token Section */}
+                <div className="border-t pt-4 mt-4 space-y-3">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Key className="h-4 w-4 text-muted-foreground" />
+                      <span className="text-sm font-medium">{t("integrations.apiToken")}</span>
+                    </div>
+                    <Badge
+                      variant={
+                        store.api_key_set && store.api_key_valid
+                          ? "default"
+                          : store.api_key_set && !store.api_key_valid
+                          ? "destructive"
+                          : "secondary"
+                      }
+                    >
+                      {store.api_key_set && store.api_key_valid
+                        ? t("integrations.apiTokenActive")
+                        : store.api_key_set && !store.api_key_valid
+                        ? t("integrations.apiTokenInvalid")
+                        : t("integrations.apiTokenNotSet")}
+                    </Badge>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    {t("integrations.apiTokenDesc")}
+                  </p>
+
+                  {/* Token input */}
+                  <div className="flex gap-2">
+                    <div className="relative flex-1">
+                      <Input
+                        type={showTokenInputs[store.id] ? "text" : "password"}
+                        placeholder={t("integrations.apiTokenPlaceholder")}
+                        value={apiTokenInputs[store.id] || ""}
+                        onChange={(e) =>
+                          setApiTokenInputs((prev) => ({ ...prev, [store.id]: e.target.value }))
+                        }
+                        disabled={updateApiToken.isPending}
+                      />
+                      <button
+                        type="button"
+                        className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                        onClick={() =>
+                          setShowTokenInputs((prev) => ({ ...prev, [store.id]: !prev[store.id] }))
+                        }
+                      >
+                        {showTokenInputs[store.id] ? (
+                          <EyeOff className="h-4 w-4" />
+                        ) : (
+                          <Eye className="h-4 w-4" />
+                        )}
+                      </button>
+                    </div>
+                    <Button
+                      size="sm"
+                      onClick={() => handleSaveApiToken(store.id)}
+                      disabled={!apiTokenInputs[store.id] || updateApiToken.isPending}
+                    >
+                      {updateApiToken.isPending ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        t("integrations.apiTokenSave")
+                      )}
+                    </Button>
+                  </div>
+
+                  {/* How to get token - collapsible instructions */}
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground hover:text-foreground flex items-center gap-1">
+                      <ChevronDown className="h-3 w-3" />
+                      {t("integrations.apiTokenHowTo")}
+                    </summary>
+                    <ol className="mt-2 ml-4 space-y-1 text-muted-foreground list-decimal">
+                      <li>{t("integrations.apiTokenStep1")}</li>
+                      <li>{t("integrations.apiTokenStep2")}</li>
+                      <li>{t("integrations.apiTokenStep3")}</li>
+                      <li>{t("integrations.apiTokenStep4")}</li>
+                    </ol>
+                    <p className="mt-2 text-yellow-600 dark:text-yellow-500">
+                      {t("integrations.apiTokenExpiredWarning")}
+                    </p>
+                  </details>
                 </div>
               </CardContent>
             </Card>

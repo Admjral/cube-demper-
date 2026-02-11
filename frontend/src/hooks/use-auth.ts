@@ -44,7 +44,7 @@ export function useAuth() {
   const signUp = useCallback(async (
     email: string,
     password: string,
-    metadata?: { full_name?: string; phone?: string }
+    metadata?: { full_name?: string; phone?: string; ref_code?: string }
   ) => {
     const result = await authClient.signUp(email, password, metadata)
     if (result.data) {

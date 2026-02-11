@@ -437,3 +437,122 @@ export function useToggleOrdersPolling() {
     },
   })
 }
+
+
+// ===== Customer Contacts =====
+
+export interface CustomerContact {
+  id: string
+  phone: string
+  name: string | null
+  store_name: string | null
+  orders_count: number
+  first_order_code: string | null
+  last_order_code: string | null
+  is_blocked: boolean
+  created_at: string
+  updated_at: string
+}
+
+export interface ContactsListResponse {
+  contacts: CustomerContact[]
+  total: number
+  page: number
+  per_page: number
+}
+
+export const contactsKeys = {
+  all: ['whatsapp', 'contacts'] as const,
+  list: (filters: Record<string, string | number>) => [...contactsKeys.all, filters] as const,
+}
+
+export function useCustomerContacts(filters: { store_id?: string; search?: string; page?: number; per_page?: number } = {}) {
+  const params = new URLSearchParams()
+  if (filters.store_id) params.set('store_id', filters.store_id)
+  if (filters.search) params.set('search', filters.search)
+  if (filters.page) params.set('page', String(filters.page))
+  if (filters.per_page) params.set('per_page', String(filters.per_page))
+  const query = params.toString()
+
+  return useQuery({
+    queryKey: contactsKeys.list(filters),
+    queryFn: () => api.get<ContactsListResponse>(`/whatsapp/contacts${query ? `?${query}` : ''}`),
+  })
+}
+
+export function useBlockContact() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (contactId: string) => api.patch(`/whatsapp/contacts/${contactId}/block`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: contactsKeys.all }),
+  })
+}
+
+export function useUnblockContact() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (contactId: string) => api.patch(`/whatsapp/contacts/${contactId}/unblock`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: contactsKeys.all }),
+  })
+}
+
+
+// ===== Broadcast Campaigns =====
+
+export interface BroadcastCampaign {
+  id: string
+  name: string
+  message_text: string
+  status: 'draft' | 'sending' | 'completed' | 'failed' | 'cancelled'
+  scheduled_at: string | null
+  started_at: string | null
+  completed_at: string | null
+  total_recipients: number
+  sent_count: number
+  failed_count: number
+  filter_min_orders: number
+  created_at: string
+}
+
+export const broadcastKeys = {
+  all: ['whatsapp', 'broadcasts'] as const,
+  list: () => [...broadcastKeys.all, 'list'] as const,
+}
+
+export function useBroadcasts() {
+  return useQuery({
+    queryKey: broadcastKeys.list(),
+    queryFn: () => api.get<BroadcastCampaign[]>('/whatsapp/broadcasts'),
+  })
+}
+
+export function useCreateBroadcast() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (data: {
+      name: string
+      message_text: string
+      store_id?: string
+      template_id?: string
+      filter_min_orders?: number
+      filter_store_id?: string
+    }) => api.post<BroadcastCampaign>('/whatsapp/broadcasts', data),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: broadcastKeys.all }),
+  })
+}
+
+export function useStartBroadcast() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (campaignId: string) => api.post(`/whatsapp/broadcasts/${campaignId}/start`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: broadcastKeys.all }),
+  })
+}
+
+export function useCancelBroadcast() {
+  const queryClient = useQueryClient()
+  return useMutation({
+    mutationFn: (campaignId: string) => api.post(`/whatsapp/broadcasts/${campaignId}/cancel`),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: broadcastKeys.all }),
+  })
+}

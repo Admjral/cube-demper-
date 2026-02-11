@@ -11,6 +11,7 @@ from datetime import datetime, timedelta
 
 from ..schemas.kaspi import (
     KaspiStoreResponse,
+    ApiTokenUpdate,
     KaspiAuthRequest,
     KaspiAuthSMSRequest,
     StoreSyncRequest,
@@ -57,7 +58,7 @@ async def list_stores(
         stores = await conn.fetch(
             """
             SELECT id, user_id, merchant_id, name, api_key, products_count,
-                   last_sync, is_active, created_at, updated_at
+                   last_sync, is_active, api_key_valid, created_at, updated_at
             FROM kaspi_stores
             WHERE user_id = $1
             ORDER BY created_at DESC
@@ -74,11 +75,52 @@ async def list_stores(
                 products_count=store['products_count'],
                 last_sync=store['last_sync'],
                 is_active=store['is_active'],
+                api_key_set=bool(store.get('api_key')),
+                api_key_valid=store.get('api_key_valid', True) if store.get('api_key') else True,
                 created_at=store['created_at'],
                 updated_at=store['updated_at']
             )
             for store in stores
         ]
+
+
+@router.patch("/stores/{store_id}/api-token")
+async def update_store_api_token(
+    store_id: str,
+    body: ApiTokenUpdate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Save Kaspi REST API token for a store. Token is generated in Kaspi MC → Settings → API."""
+    async with pool.acquire() as conn:
+        store = await conn.fetchrow(
+            "SELECT id FROM kaspi_stores WHERE id = $1 AND user_id = $2",
+            uuid.UUID(store_id), current_user['id']
+        )
+        if not store:
+            raise HTTPException(status_code=404, detail="Магазин не найден")
+
+        await conn.execute(
+            "UPDATE kaspi_stores SET api_key = $1, api_key_valid = TRUE, updated_at = NOW() WHERE id = $2",
+            body.api_token, uuid.UUID(store_id)
+        )
+
+    return {"status": "ok", "message": "API токен сохранён"}
+
+
+@router.get("/stores/token-alerts")
+async def get_token_alerts(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Get stores with invalid API tokens that need renewal."""
+    async with pool.acquire() as conn:
+        stores = await conn.fetch(
+            """SELECT id, name, merchant_id FROM kaspi_stores
+               WHERE user_id = $1 AND api_key IS NOT NULL AND api_key_valid = FALSE""",
+            current_user['id']
+        )
+    return [{"store_id": str(s['id']), "name": s['name'], "merchant_id": s['merchant_id']} for s in stores]
 
 
 @router.post("/auth", status_code=status.HTTP_200_OK)
