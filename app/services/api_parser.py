@@ -37,10 +37,11 @@ from ..core.rate_limiter import (
     mark_pricefeed_cooldown,
 )
 from ..core.database import get_db_pool
-from ..core.http_client import get_http_client
+from ..core.http_client import get_http_client, get_offers_http_client
 from ..core.circuit_breaker import get_kaspi_circuit_breaker, CircuitOpenError
 from ..core.proxy_rotator import get_user_proxy_rotator, NoProxiesAllocatedError, NoProxiesAvailableError
 from .kaspi_auth_service import get_active_session, validate_session, KaspiAuthError
+from .notification_service import create_notification, NotificationType, get_user_notification_settings
 
 logger = logging.getLogger(__name__)
 
@@ -376,6 +377,24 @@ async def get_products(
     return all_offers
 
 
+async def _fetch_offers_via_relay(product_id: str, city_id: str) -> Optional[dict]:
+    """Fetch offers through Railway relay service (bypasses IP block on VPS)."""
+    relay_url = settings.offers_relay_url
+    relay_secret = settings.offers_relay_secret
+    if not relay_url or not relay_secret:
+        return None
+
+    client = await get_http_client()
+    resp = await client.post(
+        f"{relay_url}/relay/offers",
+        json={"product_id": product_id, "city_id": city_id},
+        headers={"Authorization": f"Bearer {relay_secret}"},
+        timeout=15.0,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 async def parse_product_by_sku(
     product_id: str,
     session: dict = None,
@@ -407,6 +426,16 @@ async def parse_product_by_sku(
     effective_city_id = city_id or DEFAULT_CITY_ID
     logger.info(f"Fetching offers for product ID: {product_id}, city: {effective_city_id}")
 
+    # VPS mode: proxy through Railway relay to bypass IP block
+    if settings.offers_relay_url:
+        try:
+            result = await _fetch_offers_via_relay(product_id, effective_city_id)
+            if result is not None:
+                logger.debug(f"Got offers for {product_id} via relay: {len(result.get('offers', []))} offers")
+                return result
+        except Exception as e:
+            logger.warning(f"Relay failed for {product_id}, falling back to direct: {e}")
+
     # Wait if we're in a 403 ban period
     await wait_for_offers_ban()
 
@@ -435,65 +464,105 @@ async def parse_product_by_sku(
     # Request body with city
     body = {"cityId": effective_city_id}
 
-    client = await get_http_client()
-    breaker = get_kaspi_circuit_breaker()
-
-    max_retries = 3
-    for attempt in range(max_retries):
-        try:
-            # Use circuit breaker to prevent cascading failures
-            async with breaker:
-                response = await client.post(
-                    url,
-                    json=body,
-                    headers=headers
+    # Select HTTP client: user proxy > config proxy > direct (HTTP/1.1)
+    proxy_client = None
+    rotator = None
+    try:
+        if use_proxy and user_id:
+            # Use user's proxy rotator (for worker demping)
+            try:
+                rotator = await get_user_proxy_rotator(user_id, module=module or 'demper')
+                proxy = await rotator.get_current_proxy()
+                proxy_url = f"{proxy.protocol}://{proxy.username}:{proxy.password}@{proxy.host}:{proxy.port}"
+                proxy_client = httpx.AsyncClient(
+                    proxy=proxy_url,
+                    timeout=httpx.Timeout(30.0, connect=10.0),
+                    http2=False,
                 )
+                logger.debug(f"Using user proxy {proxy.id} for offers API")
+            except (NoProxiesAllocatedError, NoProxiesAvailableError):
+                logger.debug(f"No user proxies available, falling back to offers HTTP client")
 
-            logger.debug(f"Response status: {response.status_code}")
+        # Use offers HTTP client (HTTP/1.1, optionally with config proxy)
+        client = proxy_client or await get_offers_http_client()
+        breaker = get_kaspi_circuit_breaker()
 
-            if response.status_code == 429:
-                # Rate limited - wait and retry with jitter to prevent thundering herd
-                wait_time = (2 ** attempt) + random.uniform(0, 1)
-                logger.warning(f"Rate limited, waiting {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})")
-                await asyncio.sleep(wait_time)
-                continue
-
-            if response.status_code == 403:
-                # IP banned - pause globally and retry
-                await offers_ban_pause()
-                if attempt < max_retries - 1:
-                    logger.warning(
-                        f"Offers API 403 for product {product_id}, "
-                        f"pausing 15s then retry (attempt {attempt + 1}/{max_retries})"
+        max_retries = 3
+        for attempt in range(max_retries):
+            try:
+                # Use circuit breaker to prevent cascading failures
+                async with breaker:
+                    response = await client.post(
+                        url,
+                        json=body,
+                        headers=headers
                     )
-                    await wait_for_offers_ban()
+
+                logger.debug(f"Response status: {response.status_code}")
+
+                if response.status_code == 429:
+                    # Rate limited - wait and retry with jitter to prevent thundering herd
+                    wait_time = (2 ** attempt) + random.uniform(0, 1)
+                    logger.warning(f"Rate limited, waiting {wait_time:.1f}s (attempt {attempt + 1}/{max_retries})")
+                    await asyncio.sleep(wait_time)
                     continue
-                else:
-                    logger.error(f"Offers API 403 for product {product_id}, max retries exhausted")
+
+                if response.status_code == 403:
+                    # IP banned - pause globally and retry
+                    await offers_ban_pause()
+                    if rotator:
+                        await rotator.record_request(success=False)
+                    if attempt < max_retries - 1:
+                        logger.warning(
+                            f"Offers API 403 for product {product_id}, "
+                            f"pausing 15s then retry (attempt {attempt + 1}/{max_retries})"
+                        )
+                        await wait_for_offers_ban()
+                        continue
+                    else:
+                        logger.error(f"Offers API 403 for product {product_id}, max retries exhausted")
+                        return None
+
+                if response.status_code == 405:
+                    # Method Not Allowed — likely HTTP/2 issue or WAF block
+                    logger.warning(f"Offers API 405 for product {product_id} (attempt {attempt + 1})")
+                    if attempt < max_retries - 1:
+                        await asyncio.sleep(1 + attempt)
+                        continue
+                    else:
+                        logger.error(f"Offers API 405 for product {product_id}, max retries exhausted")
+                        return None
+
+                if response.status_code == 400:
+                    logger.warning(f"Bad request for product {product_id}: {response.text}")
                     return None
 
-            if response.status_code == 400:
-                logger.warning(f"Bad request for product {product_id}: {response.text}")
+                response.raise_for_status()
+                result = response.json()
+                if rotator:
+                    await rotator.record_request(success=True)
+                logger.debug(f"Successfully fetched offers for product {product_id}: {len(result.get('offers', []))} offers")
+                return result
+
+            except CircuitOpenError:
+                logger.warning(f"Kaspi API circuit is open, skipping product {product_id}")
                 return None
+            except httpx.HTTPError as e:
+                if rotator:
+                    await rotator.record_request(success=False)
+                if attempt < max_retries - 1:
+                    wait_time = 1 + attempt
+                    logger.warning(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
+                    await asyncio.sleep(wait_time)
+                else:
+                    logger.error(f"Error fetching offers for product {product_id}: {e}")
+                    raise
 
-            response.raise_for_status()
-            result = response.json()
-            logger.debug(f"Successfully fetched offers for product {product_id}: {len(result.get('offers', []))} offers")
-            return result
-
-        except CircuitOpenError:
-            logger.warning(f"Kaspi API circuit is open, skipping product {product_id}")
-            return None
-        except httpx.HTTPError as e:
-            if attempt < max_retries - 1:
-                wait_time = 1 + attempt
-                logger.warning(f"Request error (attempt {attempt + 1}/{max_retries}): {e}")
-                await asyncio.sleep(wait_time)
-            else:
-                logger.error(f"Error fetching offers for product {product_id}: {e}")
-                raise
-
-    raise Exception(f"Failed to fetch offers for product {product_id} after {max_retries} attempts")
+        raise Exception(f"Failed to fetch offers for product {product_id} after {max_retries} attempts")
+    finally:
+        # Clean up per-request proxy client
+        if proxy_client:
+            await proxy_client.aclose()
 
 
 async def sync_product(
@@ -1009,13 +1078,35 @@ async def sync_orders_to_db(
                     )
 
                     order_id = result["id"]
-                    if result["inserted"]:
+                    is_new_order = result["inserted"]
+                    if is_new_order:
                         inserted += 1
+                        # Notify store owner about new order
+                        try:
+                            owner = await conn.fetchrow(
+                                "SELECT user_id FROM kaspi_stores WHERE id = $1",
+                                uuid_module.UUID(store_id)
+                            )
+                            if owner:
+                                prefs = await get_user_notification_settings(pool, owner["user_id"])
+                                if prefs.get("orders", True):
+                                    total = parsed.get("total_price", 0)
+                                    code = parsed.get("kaspi_order_code", "")
+                                    await create_notification(
+                                        pool=pool,
+                                        user_id=owner["user_id"],
+                                        notification_type=NotificationType.ORDER_NEW,
+                                        title=f"Новый заказ #{code}",
+                                        message=f"Сумма: {total:,} ₸".replace(",", " ") if total else None,
+                                        data={"order_id": str(order_id), "order_code": code},
+                                    )
+                        except Exception as notif_err:
+                            logger.warning(f"Failed to send order notification: {notif_err}")
                     else:
                         updated += 1
 
                     # Upsert order items (only for new orders)
-                    if result["inserted"]:
+                    if is_new_order:
                         for entry in parsed["entries"]:
                             # Try to find matching product (by code/sku, fallback to name)
                             product = None

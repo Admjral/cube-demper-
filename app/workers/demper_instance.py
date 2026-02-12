@@ -43,6 +43,7 @@ from ..core.rate_limiter import get_global_rate_limiter, is_merchant_cooled_down
 from ..core.circuit_breaker import get_kaspi_circuit_breaker, CircuitState
 from ..services.api_parser import parse_product_by_sku, sync_product, get_merchant_session
 from ..services.kaspi_auth_service import get_active_session_with_refresh
+from ..services.notification_service import notify_price_changed, notify_min_price_reached, get_user_notification_settings
 
 logger = logging.getLogger(__name__)
 
@@ -309,6 +310,7 @@ class DemperWorker:
                         products.store_id,
                         products.kaspi_product_id,
                         products.kaspi_sku,
+                        products.name as product_name,
                         products.external_kaspi_id,
                         products.price,
                         products.min_profit,
@@ -432,6 +434,7 @@ class DemperWorker:
         async with self.semaphore:
             product_id = product["id"]
             sku = product["kaspi_sku"]
+            product_name = product.get("product_name") or sku
             external_id = product["external_kaspi_id"]
             current_price = Decimal(str(product["price"]))
             merchant_id = product["merchant_id"]
@@ -573,6 +576,17 @@ class DemperWorker:
                         logger.debug(
                             f"Competitor price for {sku} is below our min_price, waiting..."
                         )
+                        # Notify user that min price was reached
+                        try:
+                            pool = await get_db_pool()
+                            prefs = await get_user_notification_settings(pool, user_id)
+                            if prefs.get("price_changes", True):
+                                await notify_min_price_reached(
+                                    pool, user_id, product_name,
+                                    int(effective_min_price), product_id
+                                )
+                        except Exception as notif_err:
+                            logger.warning(f"Failed to send min_price notification: {notif_err}")
                         return False
 
                 if max_price and target_price > max_price:
@@ -618,6 +632,18 @@ class DemperWorker:
                     f"✓ Demper [{strategy}]: Updated {sku} from {current_price} to {target_price} "
                     f"(competitor: {min_competitor_price})"
                 )
+
+                # Notify user about price change
+                try:
+                    pool = await get_db_pool()
+                    prefs = await get_user_notification_settings(pool, user_id)
+                    if prefs.get("price_changes", True):
+                        await notify_price_changed(
+                            pool, user_id, product_name,
+                            int(current_price), int(target_price), product_id
+                        )
+                except Exception as notif_err:
+                    logger.warning(f"Failed to send price_changed notification: {notif_err}")
 
                 return True
 

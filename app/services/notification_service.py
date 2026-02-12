@@ -24,6 +24,9 @@ class NotificationType:
     REFERRAL_PAID = "referral_paid"
     REFERRAL_PAYOUT_COMPLETED = "referral_payout_completed"
 
+    # Support
+    SUPPORT_MESSAGE = "support_message"
+
     # System
     SYSTEM_SUBSCRIPTION_EXPIRING = "system_subscription_expiring"
     SYSTEM_SUBSCRIPTION_EXPIRED = "system_subscription_expired"
@@ -230,4 +233,45 @@ async def notify_subscription_expiring(
         title="Подписка истекает",
         message=f"Ваша подписка истекает через {days_left} дней. Продлите подписку, чтобы не потерять доступ.",
         data={"days_left": days_left},
+    )
+
+
+async def get_user_notification_settings(
+    pool: asyncpg.Pool,
+    user_id: uuid.UUID,
+) -> Dict[str, bool]:
+    """Get user notification preferences. Returns defaults if not set."""
+    import json
+
+    defaults = {"orders": True, "price_changes": True, "support": True}
+    async with pool.acquire() as conn:
+        raw = await conn.fetchval(
+            "SELECT notification_settings FROM users WHERE id = $1",
+            user_id,
+        )
+    if raw:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(parsed, dict):
+            defaults.update(parsed)
+    return defaults
+
+
+async def notify_support_message(
+    pool: asyncpg.Pool,
+    user_id: uuid.UUID,
+    message_preview: str,
+    chat_id: Optional[uuid.UUID] = None,
+) -> Optional[uuid.UUID]:
+    """Notify user about new support message (if enabled)."""
+    prefs = await get_user_notification_settings(pool, user_id)
+    if not prefs.get("support", True):
+        return None
+
+    return await create_notification(
+        pool=pool,
+        user_id=user_id,
+        notification_type=NotificationType.SUPPORT_MESSAGE,
+        title="Сообщение от поддержки",
+        message=message_preview[:200],
+        data={"chat_id": str(chat_id) if chat_id else None},
     )

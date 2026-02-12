@@ -12,6 +12,7 @@ from ..core.database import get_db_pool
 from ..core.security import decode_access_token, verify_password, create_access_token
 from ..core.exceptions import AuthenticationError, AuthorizationError, NotFoundError
 from ..dependencies import get_current_user
+from ..services.notification_service import notify_support_message
 
 logger = logging.getLogger(__name__)
 
@@ -450,6 +451,19 @@ async def send_message(
         "is_read": message["is_read"],
         "created_at": message["created_at"].isoformat() if message["created_at"] else None,
     })
+
+    # Notify user about new support message (push notification)
+    try:
+        async with pool.acquire() as conn:
+            chat_user_id = await conn.fetchval(
+                "SELECT user_id FROM support_chats WHERE id = $1", chat_uuid
+            )
+        if chat_user_id:
+            await notify_support_message(
+                pool, chat_user_id, content[:200], chat_uuid
+            )
+    except Exception as notif_err:
+        logger.warning(f"Failed to send support notification: {notif_err}")
 
     return {
         "id": str(message["id"]),

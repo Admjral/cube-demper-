@@ -1,6 +1,8 @@
 """Notifications router for user notification management."""
 
+import json
 from fastapi import APIRouter, Depends, Query, HTTPException
+from pydantic import BaseModel
 from typing import Annotated, Optional
 import asyncpg
 import uuid
@@ -9,6 +11,54 @@ from ..core.database import get_db_pool
 from ..dependencies import get_current_user
 
 router = APIRouter()
+
+
+class NotificationSettings(BaseModel):
+    orders: bool = True
+    price_changes: bool = True
+    support: bool = True
+
+
+@router.get("/settings")
+async def get_notification_settings(
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """Get user's notification preferences."""
+    user_id = current_user["id"]
+
+    async with pool.acquire() as conn:
+        raw = await conn.fetchval(
+            "SELECT notification_settings FROM users WHERE id = $1",
+            user_id,
+        )
+
+    settings = {"orders": True, "price_changes": True, "support": True}
+    if raw:
+        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        if isinstance(parsed, dict):
+            settings.update(parsed)
+
+    return settings
+
+
+@router.put("/settings")
+async def update_notification_settings(
+    body: NotificationSettings,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)],
+):
+    """Update user's notification preferences."""
+    user_id = current_user["id"]
+
+    async with pool.acquire() as conn:
+        await conn.execute(
+            "UPDATE users SET notification_settings = $1 WHERE id = $2",
+            json.dumps(body.model_dump(), ensure_ascii=False),
+            user_id,
+        )
+
+    return {"success": True, **body.model_dump()}
 
 
 @router.get("")
