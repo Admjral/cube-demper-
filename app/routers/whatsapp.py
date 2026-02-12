@@ -1181,24 +1181,13 @@ async def create_session_new(
         session_name = "default"
 
     async with pool.acquire() as conn:
-        if waha_plus:
-            # WAHA Plus: check if this specific session exists for user
+        if not waha_plus:
+            # WAHA Core: only allow one session per user
             existing = await conn.fetchrow(
-                "SELECT id FROM whatsapp_sessions WHERE user_id = $1 AND session_name = $2",
-                current_user['id'], session_name
-            )
-            if existing:
-                raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Session '{session_name}' already exists"
-                )
-        else:
-            # WAHA Core: check if ANY session exists (shared 'default')
-            existing = await conn.fetchrow(
-                "SELECT id FROM whatsapp_sessions WHERE user_id = $1",
+                "SELECT id, status FROM whatsapp_sessions WHERE user_id = $1",
                 current_user['id']
             )
-            if existing:
+            if existing and existing['status'] not in ('failed', 'disconnected'):
                 raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail="You already have a WhatsApp session. Upgrade to WAHA Plus for multiple sessions."
@@ -1223,10 +1212,14 @@ async def create_session_new(
                     detail=f"Failed to create WAHA session: {e.message}"
                 )
 
-        # Insert into database
+        # Upsert into database (handles re-creation of failed sessions)
         session = await conn.fetchrow("""
             INSERT INTO whatsapp_sessions (user_id, session_name, status, waha_container_name, waha_port, waha_api_key)
             VALUES ($1, $2, 'connecting', 'demper_waha', 3000, $3)
+            ON CONFLICT (user_id, session_name) DO UPDATE SET
+                status = 'connecting',
+                waha_api_key = EXCLUDED.waha_api_key,
+                updated_at = NOW()
             RETURNING id, user_id, session_name, phone_number, status, created_at, updated_at
         """, current_user['id'], session_name, waha_api_key)
 

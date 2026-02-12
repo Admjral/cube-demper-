@@ -15,6 +15,9 @@ import csv
 import io
 import uuid
 import asyncpg
+import logging
+
+logger = logging.getLogger(__name__)
 
 from ..config import settings
 from ..routers.auth import get_current_user
@@ -569,22 +572,42 @@ async def parse_kaspi_url(
         )
 
     try:
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
-                "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
-            }
-            response = await client.get(url, headers=headers, follow_redirects=True)
+        html = None
 
-            if response.status_code != 200:
-                return ProductParseResult(
-                    kaspi_url=url,
-                    success=False,
-                    error=f"Failed to fetch page: {response.status_code}"
-                )
+        # Try relay first (VPS → Railway → Kaspi) to avoid IP bans
+        if settings.offers_relay_url and settings.offers_relay_secret:
+            try:
+                async with httpx.AsyncClient(timeout=20.0) as relay_client:
+                    relay_resp = await relay_client.post(
+                        f"{settings.offers_relay_url}/relay/parse-url",
+                        json={"url": url},
+                        headers={"Authorization": f"Bearer {settings.offers_relay_secret}"},
+                    )
+                    if relay_resp.status_code == 200:
+                        data = relay_resp.json()
+                        if data.get("status_code") == 200:
+                            html = data["html"]
+            except Exception as relay_err:
+                logger.warning(f"Relay parse-url failed, falling back to direct: {relay_err}")
 
-            html = response.text
+        # Fallback to direct request
+        if html is None:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                headers = {
+                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+                    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8",
+                    "Accept-Language": "ru-RU,ru;q=0.9,en-US;q=0.8,en;q=0.7"
+                }
+                response = await client.get(url, headers=headers, follow_redirects=True)
+
+                if response.status_code != 200:
+                    return ProductParseResult(
+                        kaspi_url=url,
+                        success=False,
+                        error=f"Failed to fetch page: {response.status_code}"
+                    )
+
+                html = response.text
 
             # Extract product name from title
             product_name = None

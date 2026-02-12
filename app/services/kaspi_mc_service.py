@@ -133,17 +133,9 @@ class KaspiMCService:
                         lastName
                     }
                     entries {
-                        productName
                         quantity
-                        basePrice
                     }
                     totalPrice
-                    deliveryAddress {
-                        city
-                        street
-                        building
-                        apartment
-                    }
                 }
             }
         }
@@ -437,15 +429,7 @@ class KaspiMCService:
                                     lastName
                                 }
                                 entries {
-                                    productName
                                     quantity
-                                    basePrice
-                                }
-                                deliveryAddress {
-                                    city
-                                    street
-                                    building
-                                    apartment
                                 }
                             }
                         }
@@ -476,7 +460,6 @@ class KaspiMCService:
                     # Convert to Open API compatible format
                     customer = detail.get("customer", {}) or {}
                     entries = detail.get("entries", []) or []
-                    delivery = detail.get("deliveryAddress", {}) or {}
 
                     # Format phone
                     raw_phone = customer.get("phoneNumber", "")
@@ -490,22 +473,20 @@ class KaspiMCService:
                         else:
                             phone = digits
 
-                    # Format address
-                    addr_parts = []
-                    for key in ['city', 'street', 'building']:
-                        if delivery.get(key):
-                            addr_parts.append(delivery[key])
-                    formatted_addr = ", ".join(addr_parts) if addr_parts else ""
-
                     order_code = detail.get("code", code)
                     creation_ts = int(datetime.utcnow().timestamp() * 1000)
+                    total_price = detail.get("totalPrice", 0)
+
+                    # Calculate per-item price from totalPrice
+                    total_qty = sum(e.get("quantity", 1) for e in entries) if entries else 1
+                    per_item_price = int(total_price / total_qty) if total_qty > 0 else total_price
 
                     order = {
                         "id": order_code,
                         "attributes": {
                             "code": order_code,
                             "state": detail.get("status", ""),
-                            "totalPrice": detail.get("totalPrice", 0),
+                            "totalPrice": total_price,
                             "deliveryCost": 0,
                             "deliveryMode": "",
                             "paymentMode": "",
@@ -516,17 +497,17 @@ class KaspiMCService:
                                 "cellPhone": phone,
                             },
                             "deliveryAddress": {
-                                "formattedAddress": formatted_addr,
+                                "formattedAddress": "",
                             },
                             "entries": [
                                 {
                                     "product": {
                                         "code": "",
                                         "sku": "",
-                                        "name": e.get("productName", ""),
+                                        "name": e.get("productName", e.get("name", "")),
                                     },
                                     "quantity": e.get("quantity", 1),
-                                    "basePrice": e.get("basePrice", 0),
+                                    "basePrice": per_item_price,
                                 }
                                 for e in entries
                             ],

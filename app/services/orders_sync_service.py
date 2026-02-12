@@ -1,21 +1,22 @@
 """
 Periodic orders sync service - fetches active orders from Kaspi MC GraphQL
-and saves them to the database.
+(or REST API when api_key is available) and saves them to the database.
 
 Runs as a background task in the backend (not in workers).
 Cycle: every 60 minutes, sequential processing with delays.
 
-MC GraphQL only shows active orders (NEW, DELIVERY, PICKUP, SIGN_REQUIRED).
-Over time, the database accumulates full order history as orders pass through
-active states before completion.
+Priority:
+1. REST API (X-Auth-Token) — real phone numbers, product names, prices
+2. MC GraphQL (session cookies) — fallback, limited data
 """
 import logging
 import asyncio
-from datetime import datetime
+from datetime import datetime, timedelta
 
 import asyncpg
 
 from .kaspi_mc_service import get_kaspi_mc_service, KaspiMCError
+from .kaspi_orders_api import KaspiOrdersAPI, KaspiTokenInvalidError, KaspiOrdersAPIError
 from .api_parser import sync_orders_to_db
 from .kaspi_auth_service import KaspiAuthError
 
@@ -30,10 +31,19 @@ STORE_DELAY = 2.0
 # Initial delay before first sync (let the app fully start)
 INITIAL_DELAY = 60
 
+# REST API order states to fetch
+REST_API_STATES = [
+    "APPROVED",
+    "ACCEPTED_BY_MERCHANT",
+    "DELIVERY",
+    "PICKUP",
+    "KASPI_DELIVERY_RETURN_REQUESTED",
+]
+
 
 async def periodic_orders_sync(pool: asyncpg.Pool):
     """
-    Background task that periodically syncs active orders from Kaspi MC.
+    Background task that periodically syncs active orders from Kaspi.
 
     Runs indefinitely, syncing all active stores every SYNC_INTERVAL seconds.
     Each store is processed sequentially with delays to respect rate limits.
@@ -57,10 +67,10 @@ async def _run_sync_cycle(pool: asyncpg.Pool):
     """Run one full sync cycle across all active stores."""
     cycle_start = datetime.utcnow()
 
-    # Get all active stores with valid sessions
+    # Get all active stores with valid sessions + check for api_key
     async with pool.acquire() as conn:
         stores = await conn.fetch("""
-            SELECT id, merchant_id, name
+            SELECT id, merchant_id, name, api_key, api_key_valid
             FROM kaspi_stores
             WHERE is_active = TRUE
               AND needs_reauth = FALSE
@@ -75,6 +85,7 @@ async def _run_sync_cycle(pool: asyncpg.Pool):
     logger.info(f"[ORDERS_SYNC] Starting cycle for {len(stores)} stores")
 
     mc = get_kaspi_mc_service()
+    rest_api = KaspiOrdersAPI()
     total_synced = 0
     total_errors = 0
 
@@ -86,13 +97,35 @@ async def _run_sync_cycle(pool: asyncpg.Pool):
         store_id = str(store['id'])
         merchant_id = store['merchant_id']
         store_name = store['name'] or merchant_id
+        api_key = store['api_key']
+        api_key_valid = store['api_key_valid']
 
         async with sem:
             try:
-                orders = await mc.fetch_orders_for_sync(
-                    merchant_id=merchant_id,
-                    limit=200,
-                )
+                orders = None
+
+                # Try REST API first if store has valid token
+                if api_key and api_key_valid:
+                    try:
+                        orders = await _fetch_via_rest_api(rest_api, api_key, store_name)
+                    except KaspiTokenInvalidError:
+                        logger.warning(f"[ORDERS_SYNC] {store_name}: API token invalid, marking invalid")
+                        async with pool.acquire() as conn:
+                            await conn.execute(
+                                "UPDATE kaspi_stores SET api_key_valid = FALSE WHERE id = $1",
+                                store['id']
+                            )
+                        orders = None
+                    except KaspiOrdersAPIError as e:
+                        logger.warning(f"[ORDERS_SYNC] {store_name}: REST API error ({e}), falling back to MC")
+                        orders = None
+
+                # Fallback to MC GraphQL
+                if orders is None:
+                    orders = await mc.fetch_orders_for_sync(
+                        merchant_id=merchant_id,
+                        limit=200,
+                    )
 
                 if orders:
                     result = await sync_orders_to_db(store_id, orders)
@@ -125,3 +158,29 @@ async def _run_sync_cycle(pool: asyncpg.Pool):
         f"[ORDERS_SYNC] Cycle complete in {elapsed:.0f}s: "
         f"{len(stores)} stores, {total_synced} orders synced, {total_errors} errors"
     )
+
+
+async def _fetch_via_rest_api(
+    rest_api: KaspiOrdersAPI,
+    api_key: str,
+    store_name: str,
+) -> list:
+    """
+    Fetch orders via Kaspi REST API (X-Auth-Token).
+
+    Returns data in the same format as MC GraphQL (JSON:API compatible),
+    so sync_orders_to_db() works without changes.
+    """
+    now = datetime.utcnow()
+    date_from = now - timedelta(days=14)
+
+    orders = await rest_api.fetch_orders(
+        api_token=api_key,
+        date_from=date_from,
+        date_to=now,
+        states=REST_API_STATES,
+        size=100,
+    )
+
+    logger.info(f"[ORDERS_SYNC] {store_name}: fetched {len(orders)} orders via REST API")
+    return orders

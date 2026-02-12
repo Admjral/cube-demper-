@@ -38,6 +38,7 @@ class KaspiOrdersAPI:
             "X-Auth-Token": api_token,
             "Content-Type": "application/vnd.api+json",
             "Accept": "application/vnd.api+json",
+            "User-Agent": "Mozilla/5.0",
         }
 
     def _get_client_kwargs(self) -> dict:

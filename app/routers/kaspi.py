@@ -1333,12 +1333,42 @@ async def get_store_stats(
             uuid.UUID(store_id)
         )
 
+        # Get orders stats
+        orders_stats = await conn.fetchrow(
+            """
+            SELECT
+                COUNT(*) FILTER (WHERE order_date >= CURRENT_DATE) as today_orders,
+                COALESCE(SUM(total_price) FILTER (WHERE order_date >= CURRENT_DATE), 0) as today_revenue,
+                COUNT(*) FILTER (WHERE order_date >= NOW() - INTERVAL '7 days') as week_orders,
+                COALESCE(SUM(total_price) FILTER (WHERE order_date >= NOW() - INTERVAL '7 days'), 0) as week_revenue,
+                COUNT(*) FILTER (WHERE order_date >= NOW() - INTERVAL '30 days') as month_orders,
+                COALESCE(SUM(total_price) FILTER (WHERE order_date >= NOW() - INTERVAL '30 days'), 0) as month_revenue,
+                COUNT(*) as total_orders,
+                COALESCE(SUM(total_price), 0) as total_revenue
+            FROM orders
+            WHERE store_id = $1
+            """,
+            uuid.UUID(store_id)
+        )
+
+        avg_order_value = (
+            orders_stats['total_revenue'] // orders_stats['total_orders']
+            if orders_stats['total_orders'] > 0 else 0
+        )
+
         return StoreStats(
             store_id=store_id,
             store_name=store['name'],
             products_count=stats['total_products'] or 0,
             active_products_count=stats['active_products'] or 0,
             demping_enabled_count=stats['demping_enabled'] or 0,
+            today_orders=orders_stats['today_orders'] or 0,
+            today_revenue=orders_stats['today_revenue'] or 0,
+            week_orders=orders_stats['week_orders'] or 0,
+            week_revenue=orders_stats['week_revenue'] or 0,
+            month_orders=orders_stats['month_orders'] or 0,
+            month_revenue=orders_stats['month_revenue'] or 0,
+            avg_order_value=avg_order_value,
             last_sync=store['last_sync']
         )
 
@@ -1418,9 +1448,19 @@ async def get_store_analytics(
                     'items': 0
                 })
 
+        # Compute summary totals from daily stats
+        total_orders = sum(d['orders'] for d in daily_stats)
+        total_revenue = sum(d['revenue'] for d in daily_stats)
+        total_items_sold = sum(d['items'] for d in daily_stats)
+        avg_order_value = total_revenue // total_orders if total_orders > 0 else 0
+
         return SalesAnalytics(
             store_id=store_id,
             period=period,
+            total_orders=total_orders,
+            total_revenue=total_revenue,
+            total_items_sold=total_items_sold,
+            avg_order_value=avg_order_value,
             daily_stats=daily_stats
         )
 

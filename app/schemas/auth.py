@@ -54,12 +54,23 @@ class UserResponse(BaseModel):
     full_name: Optional[str]
     phone: Optional[str] = None
     phone_verified: bool = False
+    company_name: Optional[str] = None
+    bin: Optional[str] = None
+    tax_type: Optional[str] = None
     role: str
     created_at: datetime
     updated_at: datetime
 
     class Config:
         from_attributes = True
+
+
+class UserProfileUpdate(BaseModel):
+    """Schema for updating user profile"""
+    full_name: Optional[str] = Field(None, max_length=255)
+    company_name: Optional[str] = Field(None, max_length=255)
+    bin: Optional[str] = Field(None, max_length=12)
+    tax_type: Optional[str] = Field(None, max_length=50)
 
 
 class VerifyOtpRequest(BaseModel):

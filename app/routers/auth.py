@@ -15,6 +15,7 @@ from ..schemas.auth import (
     UserLogin,
     Token,
     UserResponse,
+    UserProfileUpdate,
     VerifyOtpRequest,
     ForgotPasswordRequest,
     ResetPasswordRequest,
@@ -219,9 +220,59 @@ async def get_current_user_info(
         full_name=current_user['full_name'],
         phone=current_user.get('phone'),
         phone_verified=current_user.get('phone_verified', False),
+        company_name=current_user.get('company_name'),
+        bin=current_user.get('bin'),
+        tax_type=current_user.get('tax_type'),
         role=current_user['role'],
         created_at=current_user['created_at'],
         updated_at=current_user['updated_at']
+    )
+
+
+@router.patch("/me", response_model=UserResponse)
+async def update_user_profile(
+    profile_update: UserProfileUpdate,
+    current_user: Annotated[dict, Depends(get_current_user)],
+    pool: Annotated[asyncpg.Pool, Depends(get_db_pool)]
+):
+    """Update current user profile"""
+    update_dict = profile_update.dict(exclude_unset=True)
+
+    if not update_dict:
+        raise HTTPException(status_code=400, detail="No fields to update")
+
+    # Build SET clause dynamically
+    set_clauses = []
+    values = [current_user['id']]
+    param_num = 2
+
+    for field, value in update_dict.items():
+        set_clauses.append(f"{field} = ${param_num}")
+        values.append(value)
+        param_num += 1
+
+    query = f"""
+        UPDATE users
+        SET {', '.join(set_clauses)}, updated_at = NOW()
+        WHERE id = $1
+        RETURNING id, email, full_name, phone, phone_verified, company_name, bin, tax_type, role, created_at, updated_at
+    """
+
+    async with pool.acquire() as conn:
+        user = await conn.fetchrow(query, *values)
+
+    return UserResponse(
+        id=str(user['id']),
+        email=user['email'],
+        full_name=user['full_name'],
+        phone=user['phone'],
+        phone_verified=user['phone_verified'],
+        company_name=user['company_name'],
+        bin=user['bin'],
+        tax_type=user['tax_type'],
+        role=user['role'],
+        created_at=user['created_at'],
+        updated_at=user['updated_at']
     )
 
 

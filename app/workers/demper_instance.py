@@ -462,6 +462,7 @@ class DemperWorker:
             # Always exclude our own merchant_id
             excluded_merchant_ids.add(merchant_id)
 
+            session = None
             try:
                 # Small random delay to avoid synchronized bursts
                 await asyncio.sleep(random.uniform(0.01, 0.1))
@@ -651,8 +652,193 @@ class DemperWorker:
                 logger.error(f"Error processing product {sku}: {e}", exc_info=True)
                 return False
             finally:
+                # City-based demping (runs regardless of main result)
+                try:
+                    if session:
+                        await self._process_city_prices(product, session)
+                except Exception as city_err:
+                    logger.error(f"[{sku}] City prices error: {city_err}", exc_info=True)
+
                 # Random delay between product processing
                 await asyncio.sleep(random.uniform(0.1, 0.3))
+
+    async def _process_city_prices(self, product: Dict[str, Any], session: dict):
+        """
+        Process city-specific demping for a product.
+
+        For each active city price:
+        1. Fetch competitor prices for that city
+        2. Update tracking (competitor_price, our_position, last_check_time)
+        3. Adjust price if needed based on city-specific min/max
+
+        Only processes cities whose last_check_time is older than check_interval.
+        """
+        product_id = product["id"]
+        sku = product["kaspi_sku"]
+        external_id = product["external_kaspi_id"]
+        merchant_id = product["merchant_id"]
+        user_id = product.get("user_id")
+        price_step = Decimal(str(product.get("price_step_override") or product.get("store_price_step") or 1))
+        check_interval = product.get("check_interval_minutes", 15)
+
+        # Get excluded merchant IDs
+        excluded_merchant_ids = set(product.get("excluded_merchant_ids") or [])
+        excluded_merchant_ids.add(merchant_id)
+
+        pool = await get_db_pool()
+
+        try:
+            async with pool.acquire() as conn:
+                # Fetch active city prices that are due for checking
+                city_prices = await conn.fetch(
+                    """
+                    SELECT * FROM product_city_prices
+                    WHERE product_id = $1
+                      AND bot_active = true
+                      AND (
+                          last_check_time IS NULL
+                          OR last_check_time < NOW() - ($2 || ' minutes')::interval
+                      )
+                    ORDER BY last_check_time ASC NULLS FIRST
+                    LIMIT 5
+                    """,
+                    product_id,
+                    str(check_interval)
+                )
+
+                if not city_prices:
+                    return
+
+                logger.info(f"[{sku}] Processing {len(city_prices)} city prices")
+
+                for cp in city_prices:
+                    city_id = cp["city_id"]
+                    city_name = cp["city_name"]
+                    current_price = Decimal(str(cp["price"] or product["price"]))
+                    KASPI_MIN_PRICE = Decimal("10")
+                    min_price = Decimal(str(cp["min_price"] or 0))
+                    effective_min_price = max(min_price, KASPI_MIN_PRICE) if min_price > 0 else KASPI_MIN_PRICE
+                    max_price = Decimal(str(cp["max_price"])) if cp["max_price"] else None
+
+                    try:
+                        # Delay between city requests
+                        await asyncio.sleep(random.uniform(0.3, 0.8))
+
+                        # Fetch competitor prices for this city
+                        product_data = await parse_product_by_sku(
+                            str(external_id), session,
+                            city_id=city_id,
+                            user_id=user_id,
+                            use_proxy=True,
+                            module='demper'
+                        )
+
+                        if not product_data:
+                            # Update last_check_time even on failure
+                            await conn.execute(
+                                "UPDATE product_city_prices SET last_check_time = NOW() WHERE product_id = $1 AND city_id = $2",
+                                product_id, city_id
+                            )
+                            continue
+
+                        offers = product_data.get("offers", [])
+                        if not offers:
+                            await conn.execute(
+                                "UPDATE product_city_prices SET last_check_time = NOW() WHERE product_id = $1 AND city_id = $2",
+                                product_id, city_id
+                            )
+                            continue
+
+                        # Find our position and min competitor price
+                        min_competitor_price = None
+                        our_position = None
+
+                        for i, offer in enumerate(offers):
+                            offer_merchant_id = offer.get("merchantId")
+                            offer_price = offer.get("price")
+
+                            if offer_merchant_id == merchant_id:
+                                our_position = i + 1
+                            elif offer_merchant_id not in excluded_merchant_ids and offer_price is not None:
+                                if min_competitor_price is None or offer_price < min_competitor_price:
+                                    min_competitor_price = offer_price
+
+                        # Update tracking data
+                        await conn.execute(
+                            """
+                            UPDATE product_city_prices
+                            SET our_position = $1, competitor_price = $2, last_check_time = NOW(), updated_at = NOW()
+                            WHERE product_id = $3 AND city_id = $4
+                            """,
+                            our_position,
+                            int(min_competitor_price) if min_competitor_price is not None else None,
+                            product_id,
+                            city_id
+                        )
+
+                        if min_competitor_price is None:
+                            logger.debug(f"[{sku}][{city_name}] No competitor offers")
+                            continue
+
+                        # Calculate target price
+                        target_price = Decimal(str(min_competitor_price)) - price_step
+
+                        # Apply constraints
+                        if target_price < effective_min_price:
+                            logger.debug(f"[{sku}][{city_name}] Competitor {min_competitor_price} below min {effective_min_price}")
+                            continue
+
+                        if max_price and target_price > max_price:
+                            target_price = max_price
+
+                        if target_price == current_price:
+                            continue
+
+                        # Check merchant cooldown before pricefeed
+                        if is_merchant_cooled_down(merchant_id):
+                            logger.debug(f"[{sku}][{city_name}] Merchant in pricefeed cooldown")
+                            break  # No point checking more cities
+
+                        # Update price via Kaspi API
+                        sync_result = await sync_product(
+                            product_id=str(product_id),
+                            new_price=int(target_price),
+                            session=session,
+                            user_id=user_id,
+                            use_proxy=True,
+                            module='demper'
+                        )
+
+                        if sync_result and sync_result.get("success"):
+                            # Update city price in DB
+                            await conn.execute(
+                                "UPDATE product_city_prices SET price = $1, updated_at = NOW() WHERE product_id = $2 AND city_id = $3",
+                                int(target_price), product_id, city_id
+                            )
+
+                            # Also update main product price
+                            await self._update_product_price(product_id, int(target_price))
+
+                            # Record price history
+                            await self._record_price_change(
+                                product_id=product_id,
+                                old_price=int(current_price),
+                                new_price=int(target_price),
+                                competitor_price=int(min_competitor_price),
+                                change_reason=f"demper_city_{city_id}"
+                            )
+
+                            logger.info(
+                                f"[{sku}][{city_name}] City demping: {current_price} → {target_price} "
+                                f"(competitor: {min_competitor_price})"
+                            )
+
+                    except Exception as e:
+                        logger.error(f"[{sku}][{city_name}] City demping error: {e}")
+                        continue
+
+        except Exception as e:
+            logger.error(f"[{sku}] Error in _process_city_prices: {e}", exc_info=True)
 
     def _calculate_target_price(
         self,

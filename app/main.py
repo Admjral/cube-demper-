@@ -223,7 +223,7 @@ async def root():
 
 
 # Include all routers
-from .routers import auth, kaspi, preorders, whatsapp, ai, billing, admin, invoices, partner_auth, lawyer, health, support, unit_economics, referral, notifications, niches
+from .routers import auth, kaspi, preorders, whatsapp, ai, billing, admin, invoices, partner_auth, lawyer, health, support, unit_economics, referral, notifications, niches, relay
 
 app.include_router(auth.router, prefix="/auth", tags=["Authentication"])
 app.include_router(kaspi.router, prefix="/kaspi", tags=["Kaspi"])
@@ -241,6 +241,7 @@ app.include_router(unit_economics.router, prefix="/unit-economics", tags=["Unit 
 app.include_router(referral.router, prefix="/referral", tags=["Referral Program"])
 app.include_router(notifications.router, prefix="/notifications", tags=["Notifications"])
 app.include_router(niches.router, prefix="/niches", tags=["Niche Search"])
+app.include_router(relay.router, prefix="/relay", tags=["Relay"])
 
 
 if __name__ == "__main__":
